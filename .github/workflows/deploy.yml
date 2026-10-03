@@ -5,8 +5,8 @@ name: Deploy zu Hostinger
 # (Dokument-Root der Subdomain geocam.vaydena.de).
 # Playbook: reference_hostinger_ftps_deploy / feedback_ftps_upload_checkliste.
 #
-# Inhalt: GeoCam-PWA (index.html, app.css, app.js, exif.js, sw.js, manifest.webmanifest,
-#         .htaccess, Icons, vendor/leaflet/), deploy-version.txt (Marker fuer den Verify-Schritt).
+# Inhalt: GeoCam-PWA (index.html = Landingpage, app.html = App, landing.css, app.css, app.js, exif.js, sw.js, manifest.webmanifest,
+#         .htaccess, Icons, vendor/leaflet/, vendor/qrcode/), deploy-version.txt (Marker fuer den Verify-Schritt).
 #
 # ⛔ NIE mitdeployen (siehe find-Ausschluesse unten):
 #   - deploy-local.*, gen_icons.py, README.md, .gitignore, .git/, .github/, *.local.txt
@@ -184,7 +184,7 @@ jobs:
             have=$(grep -o '<title>[^<]*</title>' "$body" | head -1)
             echo "index.html Titel: lokal=$want live=$code $have"
             if grep -Eqi "$challenge" "$body"; then blocked=$((blocked+1)); elif [ "$want" != "$have" ]; then bad=1; fi
-            for f in index.html app.css app.js exif.js sw.js manifest.webmanifest vendor/leaflet/leaflet.js deploy-version.txt; do
+            for f in index.html app.html landing.css vendor/qrcode/qrcode.js app.css app.js exif.js sw.js manifest.webmanifest vendor/leaflet/leaflet.js deploy-version.txt; do
               loc=$(stat -c %s "$f"); res=$(curl -s -A "$UA" -o "$body" -w '%{http_code} %{size_download}' "$SITE/$f?cb=$RANDOM")
               echo "$f: lokal=$loc live=$res"
               if [ "$res" = "200 $loc" ]; then continue; fi

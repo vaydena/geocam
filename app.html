@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<!-- Marker: geocam-v1 -->
+<script>
+/* beforeinstallprompt feuert nur EINMAL und evtl. sehr früh -> sofort abfangen */
+window.__deferredInstall = null; window.__installed = false;
+window.addEventListener("beforeinstallprompt", function (e) {
+  e.preventDefault(); window.__deferredInstall = e;
+  window.dispatchEvent(new Event("app-installable"));
+});
+window.addEventListener("appinstalled", function () {
+  window.__installed = true; window.__deferredInstall = null;
+  window.dispatchEvent(new Event("app-installed"));
+});
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () { navigator.serviceWorker.register("./sw.js").catch(function () {}); });
+}
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>GeoCam – GPS-Kamera mit Ortsstempel</title>
+<meta name="description" content="GPS-Kamera: Fotos und Videos mit Ort, Adresse, Datum und eigenem Logo stempeln, nach Ort sortieren und per Google Maps hinnavigieren.">
+<meta name="theme-color" content="#0b1220">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="GeoCam">
+<link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+
+<!-- Install-Hinweis (inline, siehe Skript am Seitenende) -->
+<div id="hf-install" hidden>
+  <img src="./icon-192.png" alt="" width="36" height="36">
+  <div class="hf-txt">
+    <b>GeoCam als App installieren</b>
+    <span id="hf-install-manual" hidden>Browser-Menü ⋮ öffnen → „App installieren“ bzw. „Zum Startbildschirm hinzufügen“.</span>
+    <span id="hf-install-ios" hidden>Unten auf „Teilen“ tippen → „Zum Home-Bildschirm“.</span>
+    <span id="hf-install-auto" hidden>Startet direkt in der Kamera – auch offline.</span>
+  </div>
+  <button id="hf-install-btn" type="button" hidden>Installieren</button>
+  <button id="hf-install-x" type="button" aria-label="Hinweis schließen">×</button>
+</div>
+
+<main id="views">
+
+  <!-- ===== Kamera ===== -->
+  <section id="v-cam" class="view cam">
+    <video id="cam-video" playsinline muted autoplay></video>
+    <canvas id="cam-canvas"></canvas>
+
+    <div id="cam-fallback" class="cam-fallback" hidden>
+      <h2>Kamera nicht verfügbar</h2>
+      <p id="cam-fallback-msg">Bitte den Kamerazugriff erlauben.</p>
+      <button id="btn-cam-retry" class="btn" type="button">Erneut versuchen</button>
+      <button id="btn-cam-native" class="btn pri" type="button">Foto mit Geräte-Kamera aufnehmen</button>
+      <small>Das Foto wird danach mit Ort und Datum gestempelt.</small>
+    </div>
+
+    <div class="cam-top">
+      <button id="gps-chip" class="chip" type="button">Standort wird gesucht …</button>
+      <div class="cam-tools">
+        <button id="btn-timer" class="tool" type="button" aria-label="Selbstauslöser">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg><b id="timer-lbl"></b>
+        </button>
+        <button id="btn-torch" class="tool" type="button" aria-label="Licht" hidden>
+          <svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+        </button>
+        <button id="btn-pin" class="tool" type="button" aria-label="Standort manuell wählen">
+          <svg viewBox="0 0 24 24"><path d="M12 22s7-6.2 7-12a7 7 0 1 0-14 0c0 5.800 7 12 7 12z"/><circle cx="12" cy="10" r="2.500"/></svg>
+        </button>
+        <button id="btn-flip" class="tool" type="button" aria-label="Kamera wechseln">
+          <svg viewBox="0 0 24 24"><path d="M4 9a8 8 0 0 1 14-3l2 2M20 15a8 8 0 0 1-14 3l-2-2M20 3v5h-5M4 21v-5h5"/></svg>
+        </button>
+        <button id="btn-park" class="tool" type="button" aria-label="Mein Parkplatz">
+          <svg viewBox="0 0 24 24"><rect x="3.500" y="3.500" width="17" height="17" rx="3.500"/><path d="M9.500 17V7h3.500a3 3 0 0 1 0 6H9.500"/></svg>
+        </button>
+        <button id="btn-qr" class="tool" type="button" aria-label="QR-Code für meinen Standort">
+          <svg viewBox="0 0 24 24"><rect x="3.500" y="3.500" width="6" height="6" rx="1"/><rect x="14.500" y="3.500" width="6" height="6" rx="1"/><rect x="3.500" y="14.500" width="6" height="6" rx="1"/><path d="M14.500 14.500h2.500v2.500M20.500 14.500v0M14.500 20.500h0M20.500 18v2.500H18"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div id="park-arm" class="park-arm" hidden><b>P</b><span>Parkplatz-Foto: jetzt auslösen</span><button id="park-arm-x" type="button" aria-label="Abbrechen">×</button></div>
+    <div id="geo-ask" class="geo-ask" role="alert" hidden>
+      <button id="geo-ask-x" class="geo-ask-x" type="button" aria-label="Hinweis schließen">×</button>
+      <b id="geo-ask-h">Standort freigeben</b>
+      <p id="geo-ask-t"></p>
+      <div class="geo-ask-a">
+        <button id="geo-ask-btn" class="btn pri sm" type="button">Standort freigeben</button>
+        <button id="geo-ask-man" class="btn sm" type="button">Ort manuell wählen</button>
+      </div>
+    </div>
+
+    <div id="cam-count" class="cam-count" hidden></div>
+    <div id="cam-rec" class="cam-rec" hidden><i></i><span id="rec-time">00:00</span></div>
+    <div id="cam-flash" class="cam-flash"></div>
+
+    <div class="cam-bottom">
+      <div class="mode" role="tablist">
+        <button type="button" data-mode="photo" class="on">Foto</button>
+        <button type="button" data-mode="video">Video</button>
+      </div>
+      <div class="cam-row">
+        <button id="btn-last" class="last" type="button" aria-label="Galerie öffnen"></button>
+        <button id="btn-shutter" class="shutter" type="button" aria-label="Auslösen"><i></i></button>
+        <button id="btn-import" class="imp" type="button" aria-label="Vorhandene Fotos importieren">
+          <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg><span>Import</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Galerie ===== -->
+  <section id="v-gal" class="view page" hidden>
+    <header class="bar">
+      <h1>Galerie</h1>
+      <button id="btn-import2" class="btn sm" type="button">Importieren</button>
+    </header>
+    <div class="gal-ctl">
+      <input id="gal-search" type="search" placeholder="Ort, Adresse oder Notiz suchen" autocomplete="off">
+      <div class="seg" id="gal-sort">
+        <button type="button" data-sort="place" class="on">Nach Ort</button>
+        <button type="button" data-sort="date">Nach Datum</button>
+      </div>
+    </div>
+    <div id="gal-list"></div>
+    <div id="gal-empty" class="empty" hidden>
+      <b>Noch keine Aufnahmen</b>
+      <span>Fotos und Videos erscheinen hier – automatisch nach Ort sortiert.</span>
+    </div>
+  </section>
+
+  <!-- ===== Karte ===== -->
+  <section id="v-map" class="view mapview" hidden>
+    <div id="map"></div>
+    <div id="map-empty" class="map-empty" hidden>Noch keine Aufnahmen mit Standort.</div>
+  </section>
+
+  <!-- ===== Einstellungen ===== -->
+  <section id="v-set" class="view page" hidden>
+    <header class="bar"><h1>Einstellungen</h1></header>
+
+    <div class="card">
+      <h2>Stempel-Vorschau</h2>
+      <canvas id="set-preview" width="640" height="400"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>Vorlage</h2>
+      <div class="tpls" id="tpls">
+        <button type="button" data-tpl="classic">Klassisch</button>
+        <button type="button" data-tpl="modern">Modern</button>
+        <button type="button" data-tpl="minimal">Minimal</button>
+        <button type="button" data-tpl="pro">Bericht</button>
+      </div>
+      <label class="row"><span>Position</span>
+        <select data-s="pos"><option value="bottom">Unten</option><option value="top">Oben</option></select></label>
+      <label class="row"><span>Größe</span>
+        <select data-s="scale" data-num><option value="0.8">Klein</option><option value="1">Mittel</option><option value="1.25">Groß</option></select></label>
+    </div>
+
+    <div class="card">
+      <h2>Angaben im Stempel</h2>
+      <label class="row"><span>Mini-Karte</span><input type="checkbox" data-f="map"></label>
+      <label class="row"><span>Ort</span><input type="checkbox" data-f="place"></label>
+      <label class="row"><span>Adresse</span><input type="checkbox" data-f="address"></label>
+      <label class="row"><span>Koordinaten</span><input type="checkbox" data-f="coords"></label>
+      <label class="row"><span>Koordinaten-Format</span>
+        <select data-s="coordFmt"><option value="dec">Dezimal (52,520008°)</option><option value="dms">Grad/Min/Sek</option></select></label>
+      <label class="row"><span>Datum und Uhrzeit</span><input type="checkbox" data-f="datetime"></label>
+      <label class="row"><span>Höhe</span><input type="checkbox" data-f="alt"></label>
+      <label class="row"><span>GPS-Genauigkeit</span><input type="checkbox" data-f="acc"></label>
+      <label class="row"><span>Kompassrichtung</span><input type="checkbox" data-f="compass"></label>
+      <label class="row"><span>Wetter</span><input type="checkbox" data-f="weather"></label>
+      <label class="row"><span>Projektname</span><input type="checkbox" data-f="project"></label>
+      <label class="row"><span>Notiz</span><input type="checkbox" data-f="note"></label>
+      <label class="col"><span>Projektname</span><input type="text" data-s="project" maxlength="60" placeholder="z. B. Baustelle Hauptstraße 12"></label>
+      <label class="col"><span>Notiz</span><input type="text" data-s="note" maxlength="120" placeholder="z. B. Zustand vor Übergabe"></label>
+    </div>
+
+    <div class="card">
+      <h2>Eigenes Logo</h2>
+      <div class="logo-row">
+        <div id="logo-prev" class="logo-prev"><span>Kein Logo</span></div>
+        <div class="logo-btns">
+          <button id="btn-logo" class="btn pri" type="button">Logo auswählen</button>
+          <button id="btn-logo-del" class="btn" type="button" hidden>Entfernen</button>
+        </div>
+      </div>
+      <label class="row"><span>Position</span>
+        <select data-s="logoPos"><option value="tr">Oben rechts</option><option value="tl">Oben links</option><option value="br">Unten rechts</option><option value="bl">Unten links</option></select></label>
+      <label class="row"><span>Größe</span><input type="range" data-s="logoSize" data-num min="8" max="40" step="1"></label>
+      <p class="hint">PNG mit transparentem Hintergrund wirkt am besten. Das Logo bleibt auf diesem Gerät.</p>
+    </div>
+
+    <div class="card">
+      <h2>Aufnahme</h2>
+      <label class="row"><span>GPS in die Bilddatei schreiben (EXIF)</span><input type="checkbox" data-s="exif"></label>
+      <label class="row"><span>Ton bei Videos aufnehmen</span><input type="checkbox" data-s="audio"></label>
+      <label class="row"><span>Importierte Fotos stempeln</span><input type="checkbox" data-s="stampImport"></label>
+      <label class="row"><span>Foto-Qualität</span>
+        <select data-s="quality" data-num><option value="0.8">Normal</option><option value="0.92">Hoch</option><option value="0.97">Sehr hoch</option></select></label>
+    </div>
+
+    <div class="card">
+      <h2>Galerie</h2>
+      <label class="row"><span>Gruppieren nach</span>
+        <select data-s="groupBy"><option value="city">Stadt / Gemeinde</option><option value="suburb">Stadtteil</option></select></label>
+    </div>
+
+    <div class="card">
+      <h2>Online-Dienste</h2>
+      <label class="row"><span>Adresse und Ort online ermitteln</span><input type="checkbox" data-s="geocodeOnline"></label>
+      <p class="hint">Für Adresse, Mini-Karte und Karte wird der Standort an OpenStreetMap übermittelt, für das Wetter an Open-Meteo. Fotos und Videos verlassen das Gerät nicht. Ohne Internet werden Aufnahmen mit Koordinaten gespeichert und der Ort später ergänzt.</p>
+    </div>
+
+    <div class="card">
+      <h2>Speicher</h2>
+      <p class="hint" id="storage-info">–</p>
+      <button id="btn-wipe" class="btn danger" type="button">Alle Aufnahmen löschen</button>
+    </div>
+
+    <p class="foot">GeoCam · Version 1.1 · Kartendaten © OpenStreetMap-Mitwirkende</p>
+  </section>
+</main>
+
+<nav class="tabs" id="tabs">
+  <button type="button" data-view="cam" class="on"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.500"/></svg><span>Kamera</span></button>
+  <button type="button" data-view="gal"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.500"/><rect x="13" y="3" width="8" height="8" rx="1.500"/><rect x="3" y="13" width="8" height="8" rx="1.500"/><rect x="13" y="13" width="8" height="8" rx="1.500"/></svg><span>Galerie</span></button>
+  <button type="button" data-view="map"><svg viewBox="0 0 24 24"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2zM9 4v14M15 6v14"/></svg><span>Karte</span></button>
+  <button type="button" data-view="set"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span>Einstellungen</span></button>
+</nav>
+
+<!-- ===== Detailansicht ===== -->
+<div id="detail" class="sheet" hidden>
+  <header class="bar">
+    <button id="d-close" class="btn sm" type="button">‹ Zurück</button>
+    <h1 id="d-title">Aufnahme</h1>
+    <button id="d-del" class="btn sm danger" type="button">Löschen</button>
+  </header>
+  <div class="sheet-body">
+    <div id="d-media" class="d-media"></div>
+    <a id="d-nav" class="btn pri big" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24"><path d="M12 2 20 21l-8-4-8 4z"/></svg>Route mit Google Maps</a>
+    <div class="d-actions">
+      <a id="d-show" class="btn" target="_blank" rel="noopener">In Google Maps ansehen</a>
+      <button id="d-share" class="btn" type="button">Teilen</button>
+      <button id="d-dl" class="btn" type="button">Herunterladen</button>
+      <button id="d-loc" class="btn" type="button">Ort ändern</button>
+      <button id="d-qr" class="btn" type="button">QR-Code</button>
+      <button id="d-park" class="btn" type="button">Als Parkplatz merken</button>
+      <button id="d-stamp" class="btn" type="button" hidden>Stempel einbrennen</button>
+    </div>
+    <dl id="d-info" class="d-info"></dl>
+    <label class="col"><span>Notiz zur Aufnahme</span><textarea id="d-note" rows="2" maxlength="300"></textarea></label>
+  </div>
+</div>
+
+<!-- ===== Ortswahl ===== -->
+<div id="picker" class="sheet" hidden>
+  <header class="bar">
+    <button id="p-cancel" class="btn sm" type="button">Abbrechen</button>
+    <h1>Ort wählen</h1>
+    <button id="p-ok" class="btn sm pri" type="button" disabled>Übernehmen</button>
+  </header>
+  <form id="p-form" class="p-search">
+    <input id="p-q" type="search" placeholder="Adresse oder Ort suchen" autocomplete="off">
+    <button class="btn sm" type="submit">Suchen</button>
+  </form>
+  <div id="p-map"></div>
+  <div class="p-foot">
+    <span id="p-info">Auf die Karte tippen, um den Ort zu setzen.</span>
+    <button id="p-gps" class="btn sm" type="button" hidden>Wieder GPS verwenden</button>
+  </div>
+</div>
+
+<!-- ===== Mein Parkplatz ===== -->
+<div id="park" class="sheet" hidden>
+  <header class="bar">
+    <button id="pk-close" class="btn sm" type="button">‹ Zurück</button>
+    <h1>Mein Parkplatz</h1>
+    <span class="bar-sp"></span>
+  </header>
+  <div class="sheet-body">
+    <div id="pk-empty" class="pk-empty">
+      <div class="pk-sign">P</div>
+      <h2>Wo steht mein Auto?</h2>
+      <p>Fotografiere deinen Parkplatz. GeoCam merkt sich Foto und Ort – und führt dich später zu Fuß dorthin zurück.</p>
+      <button id="pk-shoot" class="btn pri big" type="button">Parkplatz jetzt fotografieren</button>
+      <p class="pk-hint">Tipp: Im Parkhaus Ebene und Stellplatznummer mit aufs Bild nehmen – drinnen ist GPS oft ungenau.</p>
+    </div>
+    <div id="pk-full" class="pk-full" hidden>
+      <div class="d-media"><img id="pk-img" alt="Foto vom Parkplatz"></div>
+      <div class="pk-head">
+        <div id="pk-dist" class="pk-dist">–</div>
+        <div id="pk-since" class="pk-since"></div>
+      </div>
+      <a id="pk-nav" class="btn pri big" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24"><path d="M12 2 20 21l-8-4-8 4z"/></svg>Zurück zum Auto</a>
+      <p id="pk-noloc" class="pk-hint" hidden>Zu diesem Foto ist kein Ort gespeichert. Öffne die Aufnahme und setze ihn über „Ort ändern“.</p>
+      <div class="d-actions">
+        <button id="pk-qr" class="btn" type="button">QR-Code</button>
+        <button id="pk-open" class="btn" type="button">Aufnahme öffnen</button>
+      </div>
+      <dl id="pk-info" class="d-info"></dl>
+      <label class="col"><span>Notiz (Parkdeck, Ebene, Stellplatz)</span>
+        <input id="pk-note" type="text" maxlength="120" placeholder="z. B. Ebene 2, Platz 147" autocomplete="off"></label>
+      <button id="pk-new" class="btn" type="button">Neuen Parkplatz fotografieren</button>
+      <button id="pk-end" class="btn danger" type="button">Parkplatz beenden</button>
+      <p class="pk-hint">„Parkplatz beenden“ löst nur die Markierung – das Foto bleibt in der Galerie.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Standort-QR-Code ===== -->
+<div id="qr" class="sheet" hidden>
+  <header class="bar">
+    <button id="qr-close" class="btn sm" type="button">‹ Zurück</button>
+    <h1>Standort-QR-Code</h1>
+    <span class="bar-sp"></span>
+  </header>
+  <div class="sheet-body qr-body">
+    <canvas id="qr-canvas" width="720" height="720"></canvas>
+    <div id="qr-place" class="qr-place"></div>
+    <div id="qr-coords" class="qr-coords"></div>
+    <p class="pk-hint">Mit der Handykamera scannen – der Code öffnet diesen Ort in Google Maps.</p>
+    <div class="d-actions">
+      <button id="qr-share" class="btn pri" type="button">Teilen</button>
+      <button id="qr-save" class="btn" type="button">Als Bild speichern</button>
+      <button id="qr-copy" class="btn" type="button">Link kopieren</button>
+      <a id="qr-link" class="btn" target="_blank" rel="noopener">In Google Maps öffnen</a>
+    </div>
+  </div>
+</div>
+
+<div id="busy" class="busy" hidden><i></i><span id="busy-txt">Bitte warten …</span></div>
+<div id="toast" class="toast" hidden></div>
+
+<input type="file" id="file-import" multiple accept="image/*,video/*" hidden>
+<input type="file" id="file-capture" accept="image/*" capture="environment" hidden>
+<input type="file" id="file-logo" accept="image/*" hidden>
+
+<script src="./vendor/leaflet/leaflet.js"></script>
+<script src="./exif.js"></script>
+<script src="./vendor/qrcode/qrcode.js"></script>
+<script src="./app.js"></script>
+
+<script>
+/* Install-Affordanz – bewusst inline (nicht im SW-gecachten app.js) */
+(function () {
+  var KEY = "hf_install_snooze", DAYS = 14;
+  var box = document.getElementById("hf-install"), btn = document.getElementById("hf-install-btn");
+  var manual = document.getElementById("hf-install-manual"), ios = document.getElementById("hf-install-ios");
+  var auto = document.getElementById("hf-install-auto"), x = document.getElementById("hf-install-x");
+  try { localStorage.removeItem("hf_install_hidden"); } catch (e) {}
+  function isStandalone() {
+    return (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+  }
+  function isIOS() {
+    return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  }
+  function snoozed() {
+    try { var t = +localStorage.getItem(KEY); return t && Date.now() - t < DAYS * 864e5; } catch (e) { return false; }
+  }
+  function blocked() { return isStandalone() || window.__installed || snoozed(); }
+  function only(node) {
+    [manual, ios, auto].forEach(function (n) { n.hidden = n !== node; });
+    btn.hidden = node !== auto; box.hidden = false;
+  }
+  function offerChromium() { if (!blocked() && window.__deferredInstall) only(auto); }
+  function offerManual() { if (!blocked() && !window.__deferredInstall) only(manual); }
+  function offerIOS() { if (!blocked()) only(ios); }
+  btn.addEventListener("click", function () {
+    var ev = window.__deferredInstall; if (!ev) { only(manual); return; }
+    ev.prompt();
+    (ev.userChoice || Promise.resolve()).then(function () { window.__deferredInstall = null; box.hidden = true; });
+  });
+  x.addEventListener("click", function () {
+    box.hidden = true; try { localStorage.setItem(KEY, String(Date.now())); } catch (e) {}
+  });
+  window.addEventListener("app-installable", offerChromium);
+  window.addEventListener("app-installed", function () { box.hidden = true; });
+  if (isIOS()) offerIOS();
+  else if (window.__deferredInstall) offerChromium();
+  else setTimeout(offerManual, 1600);   /* Pflicht-Fallback: Event kommt oft spät oder nie */
+})();
+</script>
+</body>
+</html>

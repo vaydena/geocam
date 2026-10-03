@@ -526,7 +526,16 @@
     renderStamped(video, vw, vh, d).then(function (r) {
       var m = metaFromLive(d, "photo");
       m.mime = "image/jpeg"; m.w = vw; m.h = vh; m.thumb = thumbOf(r.canvas, vw, vh);
-      return addItem(m, r.blob).then(function () { if (!hasLoc(d)) toast("Ohne Standort gespeichert – Ort lässt sich später setzen."); });
+      return addItem(m, r.blob).then(function () {
+        if (parkArmed) {
+          armPark(false);
+          return setPark(m.id).then(function () {
+            openPark();
+            if (!hasLoc(d)) toast("Parkplatz-Foto gespeichert – aber ohne Standort. Bitte den Ort in der Aufnahme setzen.", 6000);
+          });
+        }
+        if (!hasLoc(d)) toast("Ohne Standort gespeichert – Ort lässt sich später setzen.");
+      });
     }).catch(saveErr);
   }
   function recMime() {
@@ -742,6 +751,7 @@
         var t = document.createElement("button"); t.type = "button"; t.className = "th"; t.dataset.id = it.id;
         var im = document.createElement("img"); im.loading = "lazy"; im.alt = it.place || "Aufnahme"; im.src = it.thumb; t.appendChild(im);
         if (it.type === "video") { var v = document.createElement("span"); v.className = "vid"; v.textContent = "▶ " + fmtDur(it.dur); t.appendChild(v); }
+        if (it.id === parkId) { var pk = document.createElement("span"); pk.className = "pk"; pk.textContent = "P"; t.appendChild(pk); }
         t.addEventListener("click", function () { openDetail(it.id); });
         grid.appendChild(t);
       });
@@ -778,6 +788,11 @@
         html: '<div class="gc-m"><img alt="" src="' + l[0].thumb + '">' + (n > 1 ? "<b>" + n + "</b>" : "") + "</div>" });
       L.marker([lat, lng], { icon: icon }).addTo(mLayer).on("click", function () { clusterClick(l, [lat, lng]); });
     });
+    var pi = parkItem();
+    if (pi && hasLoc(pi)) {
+      L.marker([pi.lat, pi.lng], { zIndexOffset: 1000, icon: L.divIcon({ className: "", iconSize: [34, 34], iconAnchor: [17, 58],
+        html: '<div class="gc-park">P</div>' }) }).addTo(mLayer).on("click", openPark);
+    }
   }
   function clusterClick(l, center) {
     if (l.length === 1) { openDetail(l[0].id); return; }
@@ -798,6 +813,7 @@
   var sheets = [];
   function openSheet(el, onClose) {
     el.hidden = false; sheets.push({ el: el, onClose: onClose });
+    el.style.zIndex = 1000 + sheets.length;   /* später geöffnete Sheets liegen oben */
     try { history.pushState({ gc: sheets.length }, ""); } catch (e) {}
   }
   function closeSheet() { if (sheets.length) history.back(); }
@@ -827,6 +843,8 @@
     if (geo) { nav.href = mapsNav(it); sh.href = mapsShow(it); } else { nav.removeAttribute("href"); sh.removeAttribute("href"); }
     $("#d-stamp").hidden = !(it.type === "photo" && !it.stamped && geo);
     $("#d-loc").textContent = geo ? "Ort ändern" : "Ort setzen";
+    $("#d-qr").classList.toggle("off", !geo);
+    $("#d-park").textContent = it.id === parkId ? "Mein Parkplatz ✓" : "Als Parkplatz merken";
     var dl = $("#d-info"); dl.textContent = "";
     var row = function (k, v) {
       if (!v) return;
@@ -958,15 +976,19 @@
     g.beginPath(); g.arc(160, 160, 12, 0, 6.3); g.fillStyle = "#ef4444"; g.fill();
     return c;
   }
-  var _sample = null;
+  var _sample = null, _bg = null;
   function drawPreview() {
     var c = $("#set-preview"), g = c.getContext("2d"), W = c.width, H = c.height;
     var sky = g.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, "#5b9bd5"); sky.addColorStop(0.62, "#cfe3f3"); sky.addColorStop(0.62, "#6b8f5a"); sky.addColorStop(1, "#3f5d3a");
     g.fillStyle = sky; g.fillRect(0, 0, W, H);
-    g.fillStyle = "#8a8f98"; g.fillRect(W * 0.52, H * 0.3, W * 0.2, H * 0.34); g.fillStyle = "#6f747d"; g.fillRect(W * 0.3, H * 0.4, W * 0.2, H * 0.24);
-    var d = hasLoc(loc) && loc.place ? liveData() : { lat: 52.520008, lng: 13.404954, alt: 38, acc: 5, heading: 48, place: "Mitte, Berlin",
-      address: "Alexanderplatz 1, 10178 Berlin, Deutschland", weather: "18 °C, heiter", date: new Date(), note: S.note, map: null };
-    if (typeof d.alt !== "number") d.alt = 38; if (typeof d.acc !== "number") d.acc = 5; if (typeof d.heading !== "number") d.heading = 48;
+    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg"; }
+    if (_bg.complete && _bg.naturalWidth) {   /* Illustration der Freisinger Altstadt, formatfüllend */
+      var k = Math.max(W / _bg.naturalWidth, H / _bg.naturalHeight), bw = _bg.naturalWidth * k, bh = _bg.naturalHeight * k;
+      g.drawImage(_bg, (W - bw) / 2, (H - bh) / 2, bw, bh);
+    }
+    var d = hasLoc(loc) && loc.place ? liveData() : { lat: 48.402880, lng: 11.748870, alt: 448, acc: 5, heading: 48, place: "Altstadt, Freising",
+      address: "Marienplatz, 85354 Freising, Deutschland", weather: "18 °C, heiter", date: new Date(), note: S.note, map: null };
+    if (typeof d.alt !== "number") d.alt = 448; if (typeof d.acc !== "number") d.acc = 5; if (typeof d.heading !== "number") d.heading = 48;
     if (!d.weather) d.weather = "18 °C, heiter";
     if (!d.map) d.map = _sample || (_sample = sampleMap());
     drawStamp(g, W, H, d);
@@ -1032,9 +1054,139 @@
     });
   }
 
+  /* ================= Mein Parkplatz ================= */
+  var parkId = null, parkArmed = false, parkUrl = null, parkT = 0;
+  function parkItem() { return parkId ? items.filter(function (x) { return x.id === parkId; })[0] || null : null; }
+  function parkUi() { $("#btn-park").classList.toggle("on", !!parkItem()); }
+  function setPark(id) {
+    parkId = id || null; parkUi();
+    return tx(["kv"], "readwrite", function (t) { if (parkId) t.objectStore("kv").put(parkId, "park"); else t.objectStore("kv").delete("park"); })
+      .catch(function (e) { console.error(e); });
+  }
+  function armPark(on) { parkArmed = !!on; $("#park-arm").hidden = !parkArmed; }
+  function bearing(a, b) {
+    var r = Math.PI / 180, y = Math.sin((b.lng - a.lng) * r) * Math.cos(b.lat * r);
+    var x = Math.cos(a.lat * r) * Math.sin(b.lat * r) - Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos((b.lng - a.lng) * r);
+    return (Math.atan2(y, x) / r + 360) % 360;
+  }
+  function fmtDist(m) { return m < 1000 ? Math.round(m) + " m" : de(m / 1000, m < 10000 ? 1 : 0) + " km"; }
+  function fmtAgo(ms) {
+    var m = Math.max(0, Math.round(ms / 60000));
+    if (m < 1) return "gerade eben";
+    if (m < 60) return "vor " + m + " Min.";
+    var h = Math.floor(m / 60); if (h < 24) return "vor " + h + " Std. " + (m % 60) + " Min.";
+    var dd = Math.floor(h / 24); return "vor " + dd + (dd === 1 ? " Tag" : " Tagen");
+  }
+  function mapsWalk(it) { return "https://www.google.com/maps/dir/?api=1&destination=" + it.lat.toFixed(6) + "," + it.lng.toFixed(6) + "&travelmode=walking"; }
+  function parkLive() {
+    var it = parkItem(); if (!it || $("#park").hidden) return;
+    var el = $("#pk-dist");
+    if (!hasLoc(it)) el.textContent = "Kein Ort gespeichert";
+    else if (!hasLoc(loc)) el.textContent = "Entfernung: eigener Standort noch unbekannt";
+    else {
+      var m = dist(loc, it);
+      el.textContent = m < 15 ? "Du stehst am Parkplatz" : "ca. " + fmtDist(m) + " entfernt · Richtung " + compassTxt(bearing(loc, it)).split(" ")[0];
+    }
+    $("#pk-since").textContent = "Geparkt " + fmtAgo(Date.now() - it.ts) + " · " + fmtDate(new Date(it.ts));
+  }
+  function fillPark() {
+    var it = parkItem();
+    $("#pk-empty").hidden = !!it; $("#pk-full").hidden = !it;
+    if (parkUrl) { URL.revokeObjectURL(parkUrl); parkUrl = null; }
+    if (!it) return;
+    var geo = hasLoc(it), nav = $("#pk-nav"), img = $("#pk-img");
+    img.src = it.thumb;
+    if (it.type === "photo") getBlob(it.id).then(function (b) {
+      if (!b || parkId !== it.id || $("#park").hidden) return;
+      parkUrl = URL.createObjectURL(b); img.src = parkUrl;
+    }).catch(function () {});
+    nav.classList.toggle("off", !geo); if (geo) nav.href = mapsWalk(it); else nav.removeAttribute("href");
+    $("#pk-noloc").hidden = geo; $("#pk-qr").classList.toggle("off", !geo);
+    var dl = $("#pk-info"); dl.textContent = "";
+    var row = function (k, v) {
+      if (!v) return;
+      var dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = k; dd.textContent = v;
+      dl.appendChild(dt); dl.appendChild(dd);
+    };
+    row("Ort", it.place || (geo && it.geoPending ? "wird ermittelt, sobald Internet besteht" : ""));
+    row("Adresse", it.address);
+    row("Koordinaten", geo ? fmtCoords(it.lat, it.lng) : "");
+    row("Genauigkeit", typeof it.acc === "number" ? "± " + Math.round(it.acc) + " m" : "");
+    dl.hidden = !dl.firstChild;
+    $("#pk-note").value = it.note || "";
+    parkLive();
+  }
+  function openPark() {
+    if (!$("#park").hidden) { fillPark(); return; }
+    openSheet($("#park"), function () {
+      clearInterval(parkT); if (parkUrl) { URL.revokeObjectURL(parkUrl); parkUrl = null; }
+      $("#pk-img").removeAttribute("src"); render();
+    });
+    fillPark(); clearInterval(parkT); parkT = setInterval(parkLive, 3000);
+  }
+  /* Das Sheet verdeckt den Sucher: schließen, Kamera zeigen, nächstes Foto wird der Parkplatz */
+  function parkShoot() {
+    closeSheet(); armPark(true);
+    if (view !== "cam") show("cam");
+    setMode("photo");
+  }
+
+  /* ================= Standort-QR-Code ================= */
+  var qrCur = null;   // {lat, lng, place, address, url}
+  function qrDraw(c, text, pad) {
+    var q = qrcode(0, "M"); q.addData(text); q.make();
+    var n = q.getModuleCount(), g = c.getContext("2d"), W = c.width, quiet = 4;
+    var cell = Math.floor((W - 2 * (pad || 0)) / (n + 2 * quiet)), off = Math.floor((W - cell * n) / 2);
+    g.fillStyle = "#fff"; g.fillRect(0, 0, W, c.height); g.fillStyle = "#000";
+    for (var r = 0; r < n; r++) for (var k = 0; k < n; k++) if (q.isDark(r, k)) g.fillRect(off + k * cell, off + r * cell, cell, cell);
+  }
+  function openQr(o) {
+    if (!o || !hasLoc(o)) { toast("Dafür ist noch kein Standort bekannt."); return; }
+    var q = { lat: o.lat, lng: o.lng, place: o.place || "", address: o.address || "", url: mapsShow(o) };
+    try { qrDraw($("#qr-canvas"), q.url); } catch (e) { console.error(e); toast("Der QR-Code kann gerade nicht erzeugt werden."); return; }
+    qrCur = q;
+    $("#qr-place").textContent = q.place || q.address || "Standort";
+    $("#qr-coords").textContent = fmtCoords(q.lat, q.lng);
+    $("#qr-link").href = q.url;
+    openSheet($("#qr"), function () { qrCur = null; });
+  }
+  /* Bild zum Weitergeben: QR-Code mit Ort und Koordinaten darunter */
+  function qrCard(q) {
+    var c = document.createElement("canvas"); c.width = 720; c.height = 900;
+    qrDraw(c, q.url, 20);
+    var g = c.getContext("2d"); g.fillStyle = "#0b1220"; g.textAlign = "center"; g.textBaseline = "middle";
+    var t = q.place || q.address || "Standort"; g.font = "700 34px " + FONT;
+    while (t.length > 4 && g.measureText(t).width > 660) t = t.slice(0, -2).trim() + "…";
+    g.fillText(t, 360, 752);
+    g.font = "400 26px " + FONT; g.fillStyle = "#334155"; g.fillText(fmtCoords(q.lat, q.lng), 360, 800);
+    g.font = "600 22px " + FONT; g.fillStyle = "#0f766e"; g.fillText("GeoCam · scannen öffnet Google Maps", 360, 852);
+    return canvasBlob(c, "image/png");
+  }
+  function qrName(q) {
+    var s = (q.place || "Standort").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/ß/g, "ss")
+      .replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30);
+    return "GeoCam_QR" + (s ? "_" + s : "") + ".png";
+  }
+  function qrShare() {
+    if (!qrCur) return;
+    var q = qrCur, name = qrName(q);
+    qrCard(q).then(function (b) {
+      var file; try { file = new File([b], name, { type: "image/png" }); } catch (e) { file = null; }
+      var text = [q.place, q.address, q.url].filter(Boolean).join("\n");
+      if (file && navigator.canShare && navigator.canShare({ files: [file] })) navigator.share({ files: [file], title: q.place || "Standort", text: text }).catch(function () {});
+      else if (navigator.share) navigator.share({ title: q.place || "Standort", text: text }).catch(function () {});
+      else { download(b, name); toast("Teilen wird hier nicht unterstützt – der QR-Code wurde heruntergeladen."); }
+    }).catch(function (e) { console.error(e); toast("Der QR-Code konnte nicht erzeugt werden."); });
+  }
+  function qrCopy() {
+    if (!qrCur) return;
+    var u = qrCur.url, ok = function () { toast("Link kopiert."); }, bad = function () { toast(u, 8000); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(u).then(ok, bad); else bad();
+  }
+
   /* ================= Ansichten ================= */
   function render() {
-    lastThumb();
+    lastThumb(); parkUi();
     if (view === "gal") renderGallery();
     else if (view === "map") renderMap();
     else if (view === "set") storageInfo();
@@ -1076,6 +1228,12 @@
         .catch(function () { torchOn = false; });
     });
     $("#btn-pin").addEventListener("click", function () { openPicker("live"); });
+    $("#btn-park").addEventListener("click", openPark);
+    $("#btn-qr").addEventListener("click", function () {
+      if (!hasLoc(loc)) { toast("Noch kein Standort – bitte Standort freigeben oder den Ort von Hand wählen."); return; }
+      openQr(loc);
+    });
+    $("#park-arm-x").addEventListener("click", function () { armPark(false); });
     $("#gps-chip").addEventListener("click", function () {
       if (!hasLoc(loc) && (geoState === "ask" || geoState === "denied") ) requestGeo(); else openPicker("live");
     });
@@ -1104,14 +1262,18 @@
     $("#btn-wipe").addEventListener("click", function () {
       if (!items.length || !confirm("Wirklich alle " + items.length + " Aufnahmen endgültig löschen?")) return;
       tx(["media", "blobs"], "readwrite", function (t) { t.objectStore("media").clear(); t.objectStore("blobs").clear(); })
-        .then(function () { items = []; mapFitted = false; render(); toast("Alle Aufnahmen gelöscht."); }).catch(saveErr);
+        .then(function () { items = []; mapFitted = false; setPark(null); render(); toast("Alle Aufnahmen gelöscht."); }).catch(saveErr);
     });
     /* Detail */
     $("#d-close").addEventListener("click", closeSheet);
     $("#d-del").addEventListener("click", function () {
       if (!cur || !confirm("Diese Aufnahme endgültig löschen?")) return;
       var id = cur.it.id;
-      delItem(id).then(function () { items = items.filter(function (x) { return x.id !== id; }); closeSheet(); toast("Aufnahme gelöscht."); }).catch(saveErr);
+      delItem(id).then(function () {
+        items = items.filter(function (x) { return x.id !== id; });
+        if (id === parkId) { setPark(null); if (!$("#park").hidden) fillPark(); }
+        closeSheet(); toast("Aufnahme gelöscht.");
+      }).catch(saveErr);
     });
     $("#d-nav").addEventListener("click", function (e) { if (!cur || !hasLoc(cur.it)) { e.preventDefault(); toast("Für diese Aufnahme ist kein Standort gespeichert – bitte zuerst „Ort setzen“."); } });
     $("#d-show").addEventListener("click", function (e) { if (!cur || !hasLoc(cur.it)) { e.preventDefault(); toast("Für diese Aufnahme ist kein Standort gespeichert."); } });
@@ -1119,6 +1281,33 @@
     $("#d-dl").addEventListener("click", function () { if (cur) download(cur.blob, fileName(cur.it)); });
     $("#d-loc").addEventListener("click", function () { if (cur) openPicker(cur.it); });
     $("#d-stamp").addEventListener("click", function () { if (cur) burnStamp(); });
+    $("#d-qr").addEventListener("click", function () { if (cur) openQr(cur.it); });
+    $("#d-park").addEventListener("click", function () {
+      if (!cur) return;
+      if (cur.it.id === parkId) { toast("Diese Aufnahme ist bereits dein Parkplatz."); return; }
+      if (!hasLoc(cur.it)) { toast("Für diese Aufnahme ist kein Standort gespeichert – bitte zuerst „Ort setzen“."); return; }
+      setPark(cur.it.id).then(function () { if (cur) fillDetail(); if (!$("#park").hidden) fillPark(); toast("Als Parkplatz gemerkt."); });
+    });
+    /* Mein Parkplatz */
+    $("#pk-close").addEventListener("click", closeSheet);
+    $("#pk-shoot").addEventListener("click", parkShoot);
+    $("#pk-new").addEventListener("click", parkShoot);
+    $("#pk-nav").addEventListener("click", function (e) { var it = parkItem(); if (!it || !hasLoc(it)) e.preventDefault(); });
+    $("#pk-qr").addEventListener("click", function () { var it = parkItem(); if (it) openQr(it); });
+    $("#pk-open").addEventListener("click", function () { if (parkItem()) openDetail(parkId); });
+    $("#pk-note").addEventListener("change", function () { var it = parkItem(); if (!it) return; it.note = $("#pk-note").value.trim(); putItem(it).catch(saveErr); });
+    $("#pk-end").addEventListener("click", function () {
+      if (!confirm("Parkplatz beenden? Das Foto bleibt in der Galerie.")) return;
+      setPark(null).then(function () { fillPark(); toast("Parkplatz beendet."); });
+    });
+    /* QR-Code */
+    $("#qr-close").addEventListener("click", closeSheet);
+    $("#qr-share").addEventListener("click", qrShare);
+    $("#qr-save").addEventListener("click", function () {
+      if (!qrCur) return; var q = qrCur;
+      qrCard(q).then(function (b) { download(b, qrName(q)); }).catch(function () { toast("Der QR-Code konnte nicht gespeichert werden."); });
+    });
+    $("#qr-copy").addEventListener("click", qrCopy);
     $("#d-note").addEventListener("change", function () { if (!cur) return; cur.it.note = $("#d-note").value.trim(); putItem(cur.it).catch(saveErr); });
     /* Ortswahl */
     $("#p-cancel").addEventListener("click", closeSheet);
@@ -1153,16 +1342,19 @@
       if (go) { u.searchParams.delete("go"); history.replaceState(null, "", u.pathname + u.search + u.hash); }
     } catch (e) {}
     var loadAll = tx(["media", "kv"], "readonly", function (t) {
-      var out = {}, a = t.objectStore("media").getAll(), b = t.objectStore("kv").get("logo");
+      var out = {}, a = t.objectStore("media").getAll(), b = t.objectStore("kv").get("logo"), c = t.objectStore("kv").get("park");
       a.onsuccess = function () { out.items = a.result || []; }; b.onsuccess = function () { out.logo = b.result || null; };
+      c.onsuccess = function () { out.park = c.result || null; };
       return out;
     }).then(function (o) {
       items = (o.items || []).sort(function (a, b) { return b.ts - a.ts; });
+      parkId = o.park || null;
       return o.logo ? setLogo(o.logo) : null;
     }).catch(function (e) { console.error(e); toast("Der Gerätespeicher ist nicht verfügbar (privater Modus?). Aufnahmen können nicht gespeichert werden.", 7000); });
     loadAll.then(function () {
       show(go === "gal" || go === "map" || go === "set" ? go : "cam");
-      lastThumb(); startGps(); startCompass(false); backfill();
+      lastThumb(); parkUi(); startGps(); startCompass(false); backfill();
+      if (go === "park") openPark();
     });
   }
   init();

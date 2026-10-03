@@ -2,8 +2,18 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<!-- Marker: geocam-v1 -->
+<!-- Marker: geocam-landing-v1 -->
 <script>
+/* App-Icon / Schnellaktion / installierte App -> direkt in die App (app.html) */
+(function () {
+  try {
+    var q = new URLSearchParams(location.search), go = q.get("go");
+    var standalone = (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+    if (q.get("app") === "1" || go || standalone) {
+      location.replace("./app.html" + (go ? "?go=" + encodeURIComponent(go) : "?app=1"));
+    }
+  } catch (e) {}
+})();
 /* beforeinstallprompt feuert nur EINMAL und evtl. sehr früh -> sofort abfangen */
 window.__deferredInstall = null; window.__installed = false;
 window.addEventListener("beforeinstallprompt", function (e) {
@@ -18,19 +28,23 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", function () { navigator.serviceWorker.register("./sw.js").catch(function () {}); });
 }
 </script>
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<title>GeoCam – GPS-Kamera mit Ortsstempel</title>
-<meta name="description" content="GPS-Kamera: Fotos und Videos mit Ort, Adresse, Datum und eigenem Logo stempeln, nach Ort sortieren und per Google Maps hinnavigieren.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GeoCam – GPS-Kamera mit Ortsstempel, Parkplatz-Merker und Standort-QR</title>
+<meta name="description" content="GeoCam stempelt Fotos und Videos mit Ort, Adresse, Datum und eigenem Logo, sortiert sie nach Ort, merkt sich deinen Parkplatz und macht aus jedem Standort einen QR-Code. Läuft im Browser, ohne Anmeldung.">
 <meta name="theme-color" content="#0b1220">
+<link rel="canonical" href="https://geocam.vaydena.de/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="GeoCam – GPS-Kamera mit Ortsstempel">
+<meta property="og:description" content="Fotos mit Ort, Adresse und Datum stempeln, Parkplatz merken, Standort als QR-Code teilen.">
+<meta property="og:url" content="https://geocam.vaydena.de/">
+<meta property="og:image" content="https://geocam.vaydena.de/hero-freising.jpg">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="GeoCam">
-<link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
-<link rel="stylesheet" href="./app.css">
+<link rel="stylesheet" href="./landing.css">
 </head>
 <body>
 
@@ -47,248 +61,177 @@ if ("serviceWorker" in navigator) {
   <button id="hf-install-x" type="button" aria-label="Hinweis schließen">×</button>
 </div>
 
-<main id="views">
+<header class="nav">
+  <a class="brand" href="./" aria-label="GeoCam Startseite">
+    <img src="./icon-192.png" alt="" width="34" height="34"><span>GeoCam</span>
+  </a>
+  <nav aria-label="Seitenbereiche">
+    <a href="#funktionen">Funktionen</a>
+    <a href="#parkplatz">Mein Parkplatz</a>
+    <a href="#qr">Standort-QR</a>
+    <a href="#fragen">Fragen</a>
+  </nav>
+  <a class="btn sm" href="./app.html">App öffnen</a>
+</header>
 
-  <!-- ===== Kamera ===== -->
-  <section id="v-cam" class="view cam">
-    <video id="cam-video" playsinline muted autoplay></video>
-    <canvas id="cam-canvas"></canvas>
+<main>
 
-    <div id="cam-fallback" class="cam-fallback" hidden>
-      <h2>Kamera nicht verfügbar</h2>
-      <p id="cam-fallback-msg">Bitte den Kamerazugriff erlauben.</p>
-      <button id="btn-cam-retry" class="btn" type="button">Erneut versuchen</button>
-      <button id="btn-cam-native" class="btn pri" type="button">Foto mit Geräte-Kamera aufnehmen</button>
-      <small>Das Foto wird danach mit Ort und Datum gestempelt.</small>
+<section class="hero">
+  <div class="hero-txt">
+    <p class="eyebrow">GPS-Kamera für Handy und Tablet</p>
+    <h1>Jedes Foto weiß, <em>wo</em> es entstanden ist.</h1>
+    <p class="lead">GeoCam stempelt Ort, Adresse, Koordinaten, Datum und Wetter direkt ins Bild – auf Wunsch mit deinem eigenen Logo. Dazu: Parkplatz merken und Standort als QR-Code weitergeben.</p>
+    <div class="cta">
+      <a class="btn" href="./app.html">Kamera öffnen</a>
+      <button class="btn ghost" id="lp-install" type="button">Als App installieren</button>
     </div>
+    <ul class="ticks">
+      <li>Ohne Anmeldung, ohne Konto</li>
+      <li>Aufnahmen bleiben auf deinem Gerät</li>
+      <li>Kamera und Galerie auch offline</li>
+    </ul>
+  </div>
+  <figure class="hero-img">
+    <img src="./hero-freising.jpg" width="1280" height="800" alt="Beispielbild mit GeoCam-Ortsstempel: Altstadt Freising, Marienplatz, Koordinaten, Datum und Wetter">
+    <figcaption>Beispiel: Ortsstempel auf einer Illustration der Freisinger Altstadt</figcaption>
+  </figure>
+</section>
 
-    <div class="cam-top">
-      <button id="gps-chip" class="chip" type="button">Standort wird gesucht …</button>
-      <div class="cam-tools">
-        <button id="btn-timer" class="tool" type="button" aria-label="Selbstauslöser">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg><b id="timer-lbl"></b>
-        </button>
-        <button id="btn-torch" class="tool" type="button" aria-label="Licht" hidden>
-          <svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
-        </button>
-        <button id="btn-pin" class="tool" type="button" aria-label="Standort manuell wählen">
-          <svg viewBox="0 0 24 24"><path d="M12 22s7-6.2 7-12a7 7 0 1 0-14 0c0 5.800 7 12 7 12z"/><circle cx="12" cy="10" r="2.500"/></svg>
-        </button>
-        <button id="btn-flip" class="tool" type="button" aria-label="Kamera wechseln">
-          <svg viewBox="0 0 24 24"><path d="M4 9a8 8 0 0 1 14-3l2 2M20 15a8 8 0 0 1-14 3l-2-2M20 3v5h-5M4 21v-5h5"/></svg>
-        </button>
-      </div>
-    </div>
+<section id="funktionen" class="sec">
+  <h2>Was GeoCam kann</h2>
+  <p class="sub">Eine Kamera, die den Ort gleich mitschreibt – und die Aufnahmen danach wiederfindet.</p>
+  <div class="grid">
+    <article class="card">
+      <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.6"/></svg>
+      <h3>Ortsstempel im Bild</h3>
+      <p>Ort, Adresse, Koordinaten, Datum, Wetter und Mini-Karte werden fest ins Foto oder Video geschrieben. Mehrere Vorlagen zur Auswahl.</p>
+    </article>
+    <article class="card">
+      <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 15l3-3 3 3 2-2 2 2"/><circle cx="9" cy="9.5" r="1.2"/></svg>
+      <h3>Eigenes Logo</h3>
+      <p>Lade dein Firmen- oder Vereinslogo hoch – es erscheint automatisch auf allen neuen Aufnahmen. Praktisch für Baustelle, Objektbegehung oder Lieferung.</p>
+    </article>
+    <article class="card">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>
+      <h3>Galerie nach Ort</h3>
+      <p>Aufnahmen werden automatisch nach Ort gruppiert. So findest du alle Bilder einer Adresse mit einem Tipp.</p>
+    </article>
+    <article class="card">
+      <svg viewBox="0 0 24 24"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>
+      <h3>Karte mit allen Aufnahmen</h3>
+      <p>Jede Aufnahme erscheint als Punkt auf der Karte. Antippen öffnet das Bild samt Ortsangaben.</p>
+    </article>
+    <article class="card">
+      <svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8-8-2z"/></svg>
+      <h3>Route in Google Maps</h3>
+      <p>Von jeder Aufnahme aus führt ein Tipp zur Navigation in Google Maps – zurück an genau die Stelle, an der das Foto entstand.</p>
+    </article>
+    <article class="card">
+      <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M10 16V8h3a2.5 2.5 0 0 1 0 5h-3"/></svg>
+      <h3>Mein Parkplatz</h3>
+      <p>Ein Foto vom geparkten Auto genügt. GeoCam zeigt dir später Entfernung, Richtung und den Fußweg zurück.</p>
+    </article>
+    <article class="card">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v.01M21 21h-3v-3M14 21v.01"/></svg>
+      <h3>Standort als QR-Code</h3>
+      <p>Aus deinem Standort oder dem Ort einer Aufnahme wird ein QR-Code. Scannen öffnet die Stelle in Google Maps.</p>
+    </article>
+    <article class="card">
+      <svg viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      <h3>Installierbar und offline</h3>
+      <p>GeoCam lässt sich wie eine App auf den Startbildschirm legen. Kamera, Stempel und Galerie funktionieren auch ohne Netz.</p>
+    </article>
+  </div>
+</section>
 
-    <div id="geo-ask" class="geo-ask" role="alert" hidden>
-      <button id="geo-ask-x" class="geo-ask-x" type="button" aria-label="Hinweis schließen">×</button>
-      <b id="geo-ask-h">Standort freigeben</b>
-      <p id="geo-ask-t"></p>
-      <div class="geo-ask-a">
-        <button id="geo-ask-btn" class="btn pri sm" type="button">Standort freigeben</button>
-        <button id="geo-ask-man" class="btn sm" type="button">Ort manuell wählen</button>
-      </div>
-    </div>
+<section id="parkplatz" class="sec split">
+  <div>
+    <p class="eyebrow">Mein Parkplatz</p>
+    <h2>Ein Foto – und du findest dein Auto wieder.</h2>
+    <p class="sub">Fremde Stadt, großes Parkhaus, langer Tag: GeoCam merkt sich die Stelle, an der du das Foto gemacht hast.</p>
+    <ol class="steps">
+      <li><b>Parkplatz-Foto aufnehmen.</b> Auf das P-Symbol tippen und auslösen – Standort und Zeitpunkt werden gespeichert.</li>
+      <li><b>Unterwegs nachsehen.</b> GeoCam zeigt, wie weit dein Auto entfernt ist und in welcher Himmelsrichtung es steht.</li>
+      <li><b>Zurückführen lassen.</b> „Zurück zum Auto“ öffnet den Fußweg in Google Maps. Das Foto hilft beim Wiedererkennen von Ebene und Stellplatz.</li>
+    </ol>
+  </div>
+  <div class="mock" aria-hidden="true">
+    <div class="mock-h"><span class="p">P</span><b>Mein Parkplatz</b></div>
+    <div class="mock-img"><img src="./preview-freising.jpg" alt="" width="1280" height="800"></div>
+    <div class="mock-dist">ca. 460 m entfernt · Richtung SW</div>
+    <div class="mock-mut">Geparkt vor 2 Std. · Beispielanzeige</div>
+    <div class="mock-btn">Zurück zum Auto</div>
+    <div class="mock-row"><span>QR-Code</span><span>Aufnahme öffnen</span><span>Beenden</span></div>
+  </div>
+</section>
 
-    <div id="cam-count" class="cam-count" hidden></div>
-    <div id="cam-rec" class="cam-rec" hidden><i></i><span id="rec-time">00:00</span></div>
-    <div id="cam-flash" class="cam-flash"></div>
+<section id="qr" class="sec split rev">
+  <div class="qrbox">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45" shape-rendering="crispEdges" role="img" aria-label="QR-Code: Marienplatz Freising in Google Maps"><rect width="100%" height="100%" fill="#fff"/><path d="M4 4h7v1h-7zM12 4h1v1h-1zM14 4h2v1h-2zM17 4h2v1h-2zM21 4h3v1h-3zM28 4h2v1h-2zM31 4h1v1h-1zM34 4h7v1h-7zM4 5h1v1h-1zM10 5h1v1h-1zM14 5h1v1h-1zM17 5h1v1h-1zM19 5h2v1h-2zM22 5h1v1h-1zM24 5h1v1h-1zM28 5h1v1h-1zM34 5h1v1h-1zM40 5h1v1h-1zM4 6h1v1h-1zM6 6h3v1h-3zM10 6h1v1h-1zM15 6h4v1h-4zM20 6h2v1h-2zM23 6h3v1h-3zM27 6h1v1h-1zM30 6h2v1h-2zM34 6h1v1h-1zM36 6h3v1h-3zM40 6h1v1h-1zM4 7h1v1h-1zM6 7h3v1h-3zM10 7h1v1h-1zM12 7h1v1h-1zM14 7h1v1h-1zM16 7h2v1h-2zM19 7h2v1h-2zM23 7h1v1h-1zM27 7h1v1h-1zM29 7h2v1h-2zM32 7h1v1h-1zM34 7h1v1h-1zM36 7h3v1h-3zM40 7h1v1h-1zM4 8h1v1h-1zM6 8h3v1h-3zM10 8h1v1h-1zM12 8h3v1h-3zM16 8h2v1h-2zM22 8h1v1h-1zM25 8h3v1h-3zM29 8h4v1h-4zM34 8h1v1h-1zM36 8h3v1h-3zM40 8h1v1h-1zM4 9h1v1h-1zM10 9h1v1h-1zM12 9h5v1h-5zM18 9h1v1h-1zM20 9h1v1h-1zM22 9h2v1h-2zM25 9h2v1h-2zM29 9h2v1h-2zM32 9h1v1h-1zM34 9h1v1h-1zM40 9h1v1h-1zM4 10h7v1h-7zM12 10h1v1h-1zM14 10h1v1h-1zM16 10h1v1h-1zM18 10h1v1h-1zM20 10h1v1h-1zM22 10h1v1h-1zM24 10h1v1h-1zM26 10h1v1h-1zM28 10h1v1h-1zM30 10h1v1h-1zM32 10h1v1h-1zM34 10h7v1h-7zM12 11h1v1h-1zM14 11h4v1h-4zM21 11h3v1h-3zM26 11h3v1h-3zM30 11h1v1h-1zM4 12h1v1h-1zM8 12h1v1h-1zM10 12h5v1h-5zM16 12h4v1h-4zM22 12h2v1h-2zM26 12h2v1h-2zM30 12h2v1h-2zM33 12h5v1h-5zM40 12h1v1h-1zM4 13h1v1h-1zM6 13h3v1h-3zM11 13h3v1h-3zM15 13h3v1h-3zM20 13h2v1h-2zM23 13h2v1h-2zM27 13h2v1h-2zM31 13h1v1h-1zM33 13h1v1h-1zM35 13h3v1h-3zM39 13h1v1h-1zM5 14h3v1h-3zM10 14h1v1h-1zM13 14h2v1h-2zM17 14h1v1h-1zM20 14h1v1h-1zM22 14h1v1h-1zM24 14h5v1h-5zM30 14h3v1h-3zM36 14h1v1h-1zM38 14h1v1h-1zM4 15h1v1h-1zM6 15h1v1h-1zM8 15h1v1h-1zM14 15h2v1h-2zM17 15h1v1h-1zM21 15h2v1h-2zM25 15h2v1h-2zM28 15h1v1h-1zM31 15h2v1h-2zM34 15h3v1h-3zM38 15h2v1h-2zM6 16h1v1h-1zM10 16h1v1h-1zM12 16h1v1h-1zM19 16h1v1h-1zM21 16h6v1h-6zM28 16h1v1h-1zM33 16h2v1h-2zM37 16h4v1h-4zM5 17h1v1h-1zM7 17h2v1h-2zM15 17h1v1h-1zM18 17h2v1h-2zM21 17h1v1h-1zM26 17h2v1h-2zM29 17h5v1h-5zM36 17h2v1h-2zM5 18h1v1h-1zM8 18h3v1h-3zM13 18h1v1h-1zM16 18h1v1h-1zM19 18h1v1h-1zM22 18h1v1h-1zM25 18h4v1h-4zM31 18h1v1h-1zM35 18h4v1h-4zM7 19h1v1h-1zM9 19h1v1h-1zM13 19h1v1h-1zM19 19h2v1h-2zM23 19h1v1h-1zM25 19h1v1h-1zM28 19h1v1h-1zM30 19h1v1h-1zM33 19h1v1h-1zM35 19h2v1h-2zM38 19h1v1h-1zM4 20h1v1h-1zM6 20h1v1h-1zM10 20h1v1h-1zM12 20h1v1h-1zM16 20h1v1h-1zM20 20h1v1h-1zM23 20h2v1h-2zM27 20h1v1h-1zM30 20h3v1h-3zM34 20h2v1h-2zM37 20h4v1h-4zM4 21h1v1h-1zM7 21h2v1h-2zM13 21h2v1h-2zM17 21h1v1h-1zM21 21h3v1h-3zM26 21h6v1h-6zM33 21h1v1h-1zM35 21h2v1h-2zM39 21h1v1h-1zM7 22h1v1h-1zM10 22h2v1h-2zM15 22h5v1h-5zM22 22h2v1h-2zM26 22h2v1h-2zM30 22h3v1h-3zM37 22h1v1h-1zM5 23h5v1h-5zM11 23h4v1h-4zM16 23h1v1h-1zM19 23h7v1h-7zM27 23h1v1h-1zM30 23h3v1h-3zM34 23h1v1h-1zM36 23h1v1h-1zM38 23h2v1h-2zM4 24h1v1h-1zM7 24h2v1h-2zM10 24h1v1h-1zM13 24h1v1h-1zM17 24h2v1h-2zM20 24h2v1h-2zM25 24h1v1h-1zM27 24h2v1h-2zM30 24h2v1h-2zM33 24h3v1h-3zM37 24h2v1h-2zM5 25h3v1h-3zM9 25h1v1h-1zM12 25h1v1h-1zM14 25h6v1h-6zM22 25h1v1h-1zM25 25h1v1h-1zM27 25h2v1h-2zM30 25h4v1h-4zM35 25h2v1h-2zM39 25h1v1h-1zM4 26h2v1h-2zM7 26h1v1h-1zM10 26h4v1h-4zM16 26h4v1h-4zM21 26h1v1h-1zM24 26h1v1h-1zM27 26h5v1h-5zM33 26h1v1h-1zM35 26h4v1h-4zM4 27h1v1h-1zM6 27h1v1h-1zM9 27h1v1h-1zM13 27h1v1h-1zM17 27h3v1h-3zM21 27h2v1h-2zM26 27h3v1h-3zM33 27h1v1h-1zM35 27h2v1h-2zM38 27h1v1h-1zM4 28h2v1h-2zM7 28h7v1h-7zM16 28h4v1h-4zM22 28h2v1h-2zM26 28h2v1h-2zM30 28h1v1h-1zM32 28h1v1h-1zM34 28h1v1h-1zM37 28h2v1h-2zM40 28h1v1h-1zM4 29h4v1h-4zM9 29h1v1h-1zM17 29h1v1h-1zM20 29h1v1h-1zM23 29h3v1h-3zM27 29h2v1h-2zM31 29h1v1h-1zM33 29h1v1h-1zM35 29h2v1h-2zM38 29h1v1h-1zM9 30h4v1h-4zM20 30h2v1h-2zM24 30h1v1h-1zM27 30h1v1h-1zM29 30h4v1h-4zM38 30h1v1h-1zM7 31h1v1h-1zM9 31h1v1h-1zM11 31h2v1h-2zM15 31h3v1h-3zM21 31h2v1h-2zM25 31h1v1h-1zM27 31h1v1h-1zM31 31h2v1h-2zM34 31h2v1h-2zM37 31h2v1h-2zM40 31h1v1h-1zM4 32h2v1h-2zM8 32h3v1h-3zM12 32h5v1h-5zM19 32h3v1h-3zM23 32h6v1h-6zM31 32h8v1h-8zM40 32h1v1h-1zM12 33h1v1h-1zM15 33h3v1h-3zM19 33h1v1h-1zM21 33h1v1h-1zM26 33h2v1h-2zM29 33h2v1h-2zM32 33h1v1h-1zM36 33h1v1h-1zM39 33h1v1h-1zM4 34h7v1h-7zM12 34h3v1h-3zM16 34h1v1h-1zM19 34h1v1h-1zM22 34h1v1h-1zM24 34h7v1h-7zM32 34h1v1h-1zM34 34h1v1h-1zM36 34h1v1h-1zM4 35h1v1h-1zM10 35h1v1h-1zM14 35h1v1h-1zM19 35h2v1h-2zM24 35h2v1h-2zM28 35h1v1h-1zM30 35h1v1h-1zM32 35h1v1h-1zM36 35h5v1h-5zM4 36h1v1h-1zM6 36h3v1h-3zM10 36h1v1h-1zM12 36h2v1h-2zM15 36h1v1h-1zM19 36h2v1h-2zM23 36h2v1h-2zM27 36h1v1h-1zM30 36h1v1h-1zM32 36h9v1h-9zM4 37h1v1h-1zM6 37h3v1h-3zM10 37h1v1h-1zM14 37h1v1h-1zM18 37h1v1h-1zM22 37h2v1h-2zM26 37h4v1h-4zM32 37h1v1h-1zM34 37h2v1h-2zM37 37h2v1h-2zM40 37h1v1h-1zM4 38h1v1h-1zM6 38h3v1h-3zM10 38h1v1h-1zM13 38h1v1h-1zM15 38h2v1h-2zM18 38h2v1h-2zM21 38h1v1h-1zM23 38h1v1h-1zM26 38h2v1h-2zM29 38h1v1h-1zM33 38h2v1h-2zM38 38h1v1h-1zM4 39h1v1h-1zM10 39h1v1h-1zM13 39h2v1h-2zM17 39h5v1h-5zM23 39h3v1h-3zM27 39h2v1h-2zM30 39h1v1h-1zM33 39h1v1h-1zM36 39h4v1h-4zM4 40h7v1h-7zM12 40h7v1h-7zM21 40h1v1h-1zM24 40h3v1h-3zM28 40h1v1h-1zM35 40h1v1h-1zM37 40h4v1h-4z"/></svg>
+    <b>Marienplatz, Freising</b>
+    <span>48,402880° N, 11,748870° O</span>
+  </div>
+  <div>
+    <p class="eyebrow">Standort-QR</p>
+    <h2>Treffpunkt zeigen statt beschreiben.</h2>
+    <p class="sub">Der QR-Code enthält einen Google-Maps-Link zu genau diesem Punkt. Wer ihn scannt, kann sich direkt hinführen lassen – ohne GeoCam installiert zu haben.</p>
+    <ul class="ticks col">
+      <li>Für den aktuellen Standort, eine Aufnahme oder den Parkplatz</li>
+      <li>Als Bild teilen oder speichern, Link kopieren</li>
+      <li>Wird auf dem Gerät erzeugt – auch ohne Internet</li>
+    </ul>
+    <p class="note">Probier es aus: Der Code links ist echt und führt zum Marienplatz in Freising.</p>
+  </div>
+</section>
 
-    <div class="cam-bottom">
-      <div class="mode" role="tablist">
-        <button type="button" data-mode="photo" class="on">Foto</button>
-        <button type="button" data-mode="video">Video</button>
-      </div>
-      <div class="cam-row">
-        <button id="btn-last" class="last" type="button" aria-label="Galerie öffnen"></button>
-        <button id="btn-shutter" class="shutter" type="button" aria-label="Auslösen"><i></i></button>
-        <button id="btn-import" class="imp" type="button" aria-label="Vorhandene Fotos importieren">
-          <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg><span>Import</span>
-        </button>
-      </div>
-    </div>
-  </section>
+<section class="sec">
+  <h2>So funktioniert’s</h2>
+  <div class="how">
+    <div><span>1</span><h3>Öffnen</h3><p>GeoCam im Browser öffnen und Kamera sowie Standort freigeben.</p></div>
+    <div><span>2</span><h3>Aufnehmen</h3><p>Foto oder Video machen – der Stempel ist schon im Sucher zu sehen.</p></div>
+    <div><span>3</span><h3>Wiederfinden</h3><p>In der Galerie nach Ort, auf der Karte oder per Route zurück zur Stelle.</p></div>
+  </div>
+</section>
 
-  <!-- ===== Galerie ===== -->
-  <section id="v-gal" class="view page" hidden>
-    <header class="bar">
-      <h1>Galerie</h1>
-      <button id="btn-import2" class="btn sm" type="button">Importieren</button>
-    </header>
-    <div class="gal-ctl">
-      <input id="gal-search" type="search" placeholder="Ort, Adresse oder Notiz suchen" autocomplete="off">
-      <div class="seg" id="gal-sort">
-        <button type="button" data-sort="place" class="on">Nach Ort</button>
-        <button type="button" data-sort="date">Nach Datum</button>
-      </div>
-    </div>
-    <div id="gal-list"></div>
-    <div id="gal-empty" class="empty" hidden>
-      <b>Noch keine Aufnahmen</b>
-      <span>Fotos und Videos erscheinen hier – automatisch nach Ort sortiert.</span>
-    </div>
-  </section>
+<section class="sec privacy">
+  <h2>Deine Aufnahmen bleiben bei dir</h2>
+  <div class="pv">
+    <p><b>Kein Konto, kein Upload.</b> Fotos, Videos, dein Logo und der gemerkte Parkplatz werden ausschließlich im Speicher deines Browsers auf deinem Gerät abgelegt.</p>
+    <p><b>Was ins Netz geht.</b> Damit aus Koordinaten eine Adresse, ein Wetterwert und ein Kartenausschnitt werden, fragt GeoCam deinen Standort bei OpenStreetMap (Nominatim, Kartenkacheln) und Open-Meteo ab. Route und QR-Ziel öffnen Google Maps erst, wenn du darauf tippst.</p>
+    <p><b>Gut zu wissen.</b> Wer die Browserdaten löscht, löscht auch die Aufnahmen – wichtige Bilder also teilen oder exportieren.</p>
+  </div>
+</section>
 
-  <!-- ===== Karte ===== -->
-  <section id="v-map" class="view mapview" hidden>
-    <div id="map"></div>
-    <div id="map-empty" class="map-empty" hidden>Noch keine Aufnahmen mit Standort.</div>
-  </section>
+<section id="fragen" class="sec faq">
+  <h2>Häufige Fragen</h2>
+  <details><summary>Muss ich etwas installieren?</summary><p>Nein. GeoCam läuft direkt im Browser. Wer möchte, legt die Seite als App auf den Startbildschirm – dann startet sie direkt in der Kamera.</p></details>
+  <details><summary>Warum fragt GeoCam nach Kamera und Standort?</summary><p>Ohne Kamera gibt es kein Foto, ohne Standort keinen Ortsstempel. Beide Freigaben erteilst du im Browser und kannst sie dort jederzeit widerrufen.</p></details>
+  <details><summary>Funktioniert das auch ohne Internet?</summary><p>Kamera, Koordinaten-Stempel, Galerie, Parkplatz-Merker und QR-Code funktionieren offline. Adresse, Wetter und Kartenbilder brauchen eine Verbindung.</p></details>
+  <details><summary>Wie genau ist der Standort?</summary><p>So genau, wie dein Gerät ihn liefert – im Freien meist wenige Meter, in Gebäuden und Parkhäusern deutlich ungenauer. GeoCam zeigt die aktuelle Genauigkeit im Sucher an. Im Parkhaus hilft deshalb vor allem das Foto selbst.</p></details>
+  <details><summary>Kann ich vorhandene Fotos verwenden?</summary><p>Ja. Über „Import“ lassen sich Bilder aus der Galerie des Geräts übernehmen; enthaltene GPS-Daten werden dabei ausgelesen.</p></details>
+</section>
 
-  <!-- ===== Einstellungen ===== -->
-  <section id="v-set" class="view page" hidden>
-    <header class="bar"><h1>Einstellungen</h1></header>
+<section class="sec final">
+  <h2>Bereit für das erste Foto mit Ort?</h2>
+  <a class="btn" href="./app.html">Kamera öffnen</a>
+</section>
 
-    <div class="card">
-      <h2>Stempel-Vorschau</h2>
-      <canvas id="set-preview" width="640" height="400"></canvas>
-    </div>
-
-    <div class="card">
-      <h2>Vorlage</h2>
-      <div class="tpls" id="tpls">
-        <button type="button" data-tpl="classic">Klassisch</button>
-        <button type="button" data-tpl="modern">Modern</button>
-        <button type="button" data-tpl="minimal">Minimal</button>
-        <button type="button" data-tpl="pro">Bericht</button>
-      </div>
-      <label class="row"><span>Position</span>
-        <select data-s="pos"><option value="bottom">Unten</option><option value="top">Oben</option></select></label>
-      <label class="row"><span>Größe</span>
-        <select data-s="scale" data-num><option value="0.8">Klein</option><option value="1">Mittel</option><option value="1.25">Groß</option></select></label>
-    </div>
-
-    <div class="card">
-      <h2>Angaben im Stempel</h2>
-      <label class="row"><span>Mini-Karte</span><input type="checkbox" data-f="map"></label>
-      <label class="row"><span>Ort</span><input type="checkbox" data-f="place"></label>
-      <label class="row"><span>Adresse</span><input type="checkbox" data-f="address"></label>
-      <label class="row"><span>Koordinaten</span><input type="checkbox" data-f="coords"></label>
-      <label class="row"><span>Koordinaten-Format</span>
-        <select data-s="coordFmt"><option value="dec">Dezimal (52,520008°)</option><option value="dms">Grad/Min/Sek</option></select></label>
-      <label class="row"><span>Datum und Uhrzeit</span><input type="checkbox" data-f="datetime"></label>
-      <label class="row"><span>Höhe</span><input type="checkbox" data-f="alt"></label>
-      <label class="row"><span>GPS-Genauigkeit</span><input type="checkbox" data-f="acc"></label>
-      <label class="row"><span>Kompassrichtung</span><input type="checkbox" data-f="compass"></label>
-      <label class="row"><span>Wetter</span><input type="checkbox" data-f="weather"></label>
-      <label class="row"><span>Projektname</span><input type="checkbox" data-f="project"></label>
-      <label class="row"><span>Notiz</span><input type="checkbox" data-f="note"></label>
-      <label class="col"><span>Projektname</span><input type="text" data-s="project" maxlength="60" placeholder="z. B. Baustelle Hauptstraße 12"></label>
-      <label class="col"><span>Notiz</span><input type="text" data-s="note" maxlength="120" placeholder="z. B. Zustand vor Übergabe"></label>
-    </div>
-
-    <div class="card">
-      <h2>Eigenes Logo</h2>
-      <div class="logo-row">
-        <div id="logo-prev" class="logo-prev"><span>Kein Logo</span></div>
-        <div class="logo-btns">
-          <button id="btn-logo" class="btn pri" type="button">Logo auswählen</button>
-          <button id="btn-logo-del" class="btn" type="button" hidden>Entfernen</button>
-        </div>
-      </div>
-      <label class="row"><span>Position</span>
-        <select data-s="logoPos"><option value="tr">Oben rechts</option><option value="tl">Oben links</option><option value="br">Unten rechts</option><option value="bl">Unten links</option></select></label>
-      <label class="row"><span>Größe</span><input type="range" data-s="logoSize" data-num min="8" max="40" step="1"></label>
-      <p class="hint">PNG mit transparentem Hintergrund wirkt am besten. Das Logo bleibt auf diesem Gerät.</p>
-    </div>
-
-    <div class="card">
-      <h2>Aufnahme</h2>
-      <label class="row"><span>GPS in die Bilddatei schreiben (EXIF)</span><input type="checkbox" data-s="exif"></label>
-      <label class="row"><span>Ton bei Videos aufnehmen</span><input type="checkbox" data-s="audio"></label>
-      <label class="row"><span>Importierte Fotos stempeln</span><input type="checkbox" data-s="stampImport"></label>
-      <label class="row"><span>Foto-Qualität</span>
-        <select data-s="quality" data-num><option value="0.8">Normal</option><option value="0.92">Hoch</option><option value="0.97">Sehr hoch</option></select></label>
-    </div>
-
-    <div class="card">
-      <h2>Galerie</h2>
-      <label class="row"><span>Gruppieren nach</span>
-        <select data-s="groupBy"><option value="city">Stadt / Gemeinde</option><option value="suburb">Stadtteil</option></select></label>
-    </div>
-
-    <div class="card">
-      <h2>Online-Dienste</h2>
-      <label class="row"><span>Adresse und Ort online ermitteln</span><input type="checkbox" data-s="geocodeOnline"></label>
-      <p class="hint">Für Adresse, Mini-Karte und Karte wird der Standort an OpenStreetMap übermittelt, für das Wetter an Open-Meteo. Fotos und Videos verlassen das Gerät nicht. Ohne Internet werden Aufnahmen mit Koordinaten gespeichert und der Ort später ergänzt.</p>
-    </div>
-
-    <div class="card">
-      <h2>Speicher</h2>
-      <p class="hint" id="storage-info">–</p>
-      <button id="btn-wipe" class="btn danger" type="button">Alle Aufnahmen löschen</button>
-    </div>
-
-    <p class="foot">GeoCam · Version 1.0 · Kartendaten © OpenStreetMap-Mitwirkende</p>
-  </section>
 </main>
 
-<nav class="tabs" id="tabs">
-  <button type="button" data-view="cam" class="on"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.500"/></svg><span>Kamera</span></button>
-  <button type="button" data-view="gal"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.500"/><rect x="13" y="3" width="8" height="8" rx="1.500"/><rect x="3" y="13" width="8" height="8" rx="1.500"/><rect x="13" y="13" width="8" height="8" rx="1.500"/></svg><span>Galerie</span></button>
-  <button type="button" data-view="map"><svg viewBox="0 0 24 24"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2zM9 4v14M15 6v14"/></svg><span>Karte</span></button>
-  <button type="button" data-view="set"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span>Einstellungen</span></button>
-</nav>
-
-<!-- ===== Detailansicht ===== -->
-<div id="detail" class="sheet" hidden>
-  <header class="bar">
-    <button id="d-close" class="btn sm" type="button">‹ Zurück</button>
-    <h1 id="d-title">Aufnahme</h1>
-    <button id="d-del" class="btn sm danger" type="button">Löschen</button>
-  </header>
-  <div class="sheet-body">
-    <div id="d-media" class="d-media"></div>
-    <a id="d-nav" class="btn pri big" target="_blank" rel="noopener">
-      <svg viewBox="0 0 24 24"><path d="M12 2 20 21l-8-4-8 4z"/></svg>Route mit Google Maps</a>
-    <div class="d-actions">
-      <a id="d-show" class="btn" target="_blank" rel="noopener">In Google Maps ansehen</a>
-      <button id="d-share" class="btn" type="button">Teilen</button>
-      <button id="d-dl" class="btn" type="button">Herunterladen</button>
-      <button id="d-loc" class="btn" type="button">Ort ändern</button>
-      <button id="d-stamp" class="btn" type="button" hidden>Stempel einbrennen</button>
-    </div>
-    <dl id="d-info" class="d-info"></dl>
-    <label class="col"><span>Notiz zur Aufnahme</span><textarea id="d-note" rows="2" maxlength="300"></textarea></label>
-  </div>
-</div>
-
-<!-- ===== Ortswahl ===== -->
-<div id="picker" class="sheet" hidden>
-  <header class="bar">
-    <button id="p-cancel" class="btn sm" type="button">Abbrechen</button>
-    <h1>Ort wählen</h1>
-    <button id="p-ok" class="btn sm pri" type="button" disabled>Übernehmen</button>
-  </header>
-  <form id="p-form" class="p-search">
-    <input id="p-q" type="search" placeholder="Adresse oder Ort suchen" autocomplete="off">
-    <button class="btn sm" type="submit">Suchen</button>
-  </form>
-  <div id="p-map"></div>
-  <div class="p-foot">
-    <span id="p-info">Auf die Karte tippen, um den Ort zu setzen.</span>
-    <button id="p-gps" class="btn sm" type="button" hidden>Wieder GPS verwenden</button>
-  </div>
-</div>
-
-<div id="busy" class="busy" hidden><i></i><span id="busy-txt">Bitte warten …</span></div>
-<div id="toast" class="toast" hidden></div>
-
-<input type="file" id="file-import" multiple accept="image/*,video/*" hidden>
-<input type="file" id="file-capture" accept="image/*" capture="environment" hidden>
-<input type="file" id="file-logo" accept="image/*" hidden>
-
-<script src="./vendor/leaflet/leaflet.js"></script>
-<script src="./exif.js"></script>
-<script src="./app.js"></script>
+<footer>
+  <div class="brand"><img src="./icon-192.png" alt="" width="26" height="26"><span>GeoCam</span></div>
+  <p>Ein Angebot von <a href="https://vaydena.de/">Vaydena</a> · <a href="https://vaydena.de/impressum">Impressum</a> · <a href="https://vaydena.de/datenschutz">Datenschutz</a></p>
+  <p class="mut">Karten und Adressdaten © <a href="https://www.openstreetmap.org/copyright" rel="noopener">OpenStreetMap</a>-Mitwirkende · Wetterdaten: Open-Meteo · Google Maps ist eine Marke von Google LLC. Das Freising-Motiv ist eine Illustration, kein Foto.</p>
+</footer>
 
 <script>
-/* Install-Affordanz – bewusst inline (nicht im SW-gecachten app.js) */
+/* Install-Hinweis: INLINE (nicht in gecachtem JS), nie allein auf beforeinstallprompt verlassen */
 (function () {
   var KEY = "hf_install_snooze", DAYS = 14;
   var box = document.getElementById("hf-install"), btn = document.getElementById("hf-install-btn");
   var manual = document.getElementById("hf-install-manual"), ios = document.getElementById("hf-install-ios");
   var auto = document.getElementById("hf-install-auto"), x = document.getElementById("hf-install-x");
+  var cta = document.getElementById("lp-install");
   try { localStorage.removeItem("hf_install_hidden"); } catch (e) {}
   function isStandalone() {
     return (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
@@ -307,10 +250,16 @@ if ("serviceWorker" in navigator) {
   function offerChromium() { if (!blocked() && window.__deferredInstall) only(auto); }
   function offerManual() { if (!blocked() && !window.__deferredInstall) only(manual); }
   function offerIOS() { if (!blocked()) only(ios); }
-  btn.addEventListener("click", function () {
-    var ev = window.__deferredInstall; if (!ev) { only(manual); return; }
+  function doPrompt() {
+    var ev = window.__deferredInstall; if (!ev) { only(isIOS() ? ios : manual); return false; }
     ev.prompt();
     (ev.userChoice || Promise.resolve()).then(function () { window.__deferredInstall = null; box.hidden = true; });
+    return true;
+  }
+  btn.addEventListener("click", doPrompt);
+  /* Knopf im Hero: ausdrücklicher Wunsch -> Hinweis auch trotz Snooze zeigen */
+  cta.addEventListener("click", function () {
+    if (!doPrompt()) window.scrollTo({ top: 0, behavior: "smooth" });
   });
   x.addEventListener("click", function () {
     box.hidden = true; try { localStorage.setItem(KEY, String(Date.now())); } catch (e) {}
