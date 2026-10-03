@@ -7,7 +7,7 @@
    - Dokumente (HTML): Netz zuerst, offline Rückfall auf den Cache.
    - Statische Assets: Cache zuerst, sonst Netz + nachlegen. */
 
-const CACHE = "geocam-app-v1";   // <-- bei jedem Asset-/Code-Deploy die Zahl erhöhen (v2, v3, ...)
+const CACHE = "geocam-app-v2";   // <-- bei jedem Asset-/Code-Deploy die Zahl erhöhen (v2, v3, ...)
 const SHELL = [
   "./index.html",
   "./app.css",

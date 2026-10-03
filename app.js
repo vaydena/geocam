@@ -76,7 +76,7 @@
   var view = "cam";
   var loc = { lat: null, lng: null, alt: null, acc: null, heading: null, manual: false,
     place: "", city: "", suburb: "", address: "", weather: "", map: null };
-  var gpsRaw = null, gpsErr = false;
+  var gpsRaw = null;
   var ovDirty = true;
 
   /* ================= kleine Helfer ================= */
@@ -308,7 +308,8 @@
   function chip() {
     var c = $("#gps-chip"); c.classList.remove("ok", "warn");
     if (!hasLoc(loc)) {
-      c.textContent = gpsErr ? "Kein Standort – tippen zum Wählen" : "Standort wird gesucht …";
+      c.textContent = geoState === "ask" ? "Standort freigeben – tippen" : geoState === "denied" ? "Standort blockiert – tippen"
+        : geoState === "unavail" ? "Kein Standort – tippen zum Wählen" : "Standort wird gesucht …";
       c.classList.add("warn"); return;
     }
     var t = loc.place || (de(loc.lat, 4) + ", " + de(loc.lng, 4));
@@ -318,7 +319,7 @@
   }
   function setLoc(lat, lng, alt, acc) {
     loc.lat = lat; loc.lng = lng; loc.alt = typeof alt === "number" ? alt : null; loc.acc = typeof acc === "number" ? acc : null;
-    ovDirty = true; chip(); refreshLocInfo();
+    ovDirty = true; geoUi(); refreshLocInfo();
   }
   function refreshLocInfo() {
     if (!hasLoc(loc) || !online()) return;
@@ -342,13 +343,58 @@
       fetchWeather(here.lat, here.lng).then(function (w) { loc.weather = w; ovDirty = true; }).catch(function () { wxAt = 0; });
     }
   }
-  function startGps() {
-    if (!navigator.geolocation) { gpsErr = true; chip(); return; }
-    navigator.geolocation.watchPosition(function (p) {
-      gpsErr = false; gpsRaw = p.coords;
-      if (!loc.manual) setLoc(p.coords.latitude, p.coords.longitude, p.coords.altitude, p.coords.accuracy);
-    }, function () { gpsErr = true; chip(); }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+  /* Standortfreigabe: "search" | "ask" (noch nicht gefragt) | "denied" | "unavail" | "ok" */
+  var geoState = "search", geoWatch = null, geoHide = false, geoNoApi = false;
+  function geoUi() {
+    var need = !geoHide && !hasLoc(loc) && (geoState === "ask" || geoState === "denied" || geoState === "unavail");
+    $("#geo-ask").hidden = !need;
+    if (need) {
+      $("#geo-ask-h").textContent = geoState === "ask" ? "Standort freigeben" : geoState === "denied" ? "Standort ist blockiert" : "Kein Standort gefunden";
+      $("#geo-ask-t").textContent = geoState === "ask"
+        ? "GeoCam braucht deinen Standort, um Fotos und Videos mit Ort und Adresse zu stempeln und in der Karte zu zeigen."
+        : geoState === "denied"
+          ? "Bitte erlauben: Schloss-Symbol neben der Adresse → Berechtigungen → Standort → „Zulassen“ (installierte App: App-Symbol lange drücken → App-Info → Website-Einstellungen). Danach „Erneut versuchen“."
+          : geoNoApi ? "Dieser Browser unterstützt keine Standortabfrage. Der Ort lässt sich manuell wählen."
+            : "Ist der Standort (GPS) am Gerät eingeschaltet? Danach „Erneut versuchen“ – oder den Ort manuell wählen.";
+      $("#geo-ask-btn").textContent = geoState === "ask" ? "Standort freigeben" : "Erneut versuchen";
+      $("#geo-ask-btn").hidden = geoNoApi;
+    }
+    chip();
   }
+  function watchGeo() {
+    var g = navigator.geolocation;
+    if (geoWatch !== null) { g.clearWatch(geoWatch); geoWatch = null; }
+    if (geoState !== "ok") { geoState = "search"; geoUi(); }
+    geoWatch = g.watchPosition(function (p) {
+      gpsRaw = p.coords;
+      if (geoState !== "ok") { geoState = "ok"; geoUi(); }
+      if (!loc.manual) setLoc(p.coords.latitude, p.coords.longitude, p.coords.altitude, p.coords.accuracy);
+    }, function (e) {
+      if (e && e.code === 1) { g.clearWatch(geoWatch); geoWatch = null; gpsRaw = null; geoState = "denied"; }
+      else if (!gpsRaw) geoState = "unavail";      // Timeout / kein Signal: Watch läuft weiter
+      geoUi();
+    }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+  }
+  /* Aufruf aus einer Nutzergeste (Banner-Knopf / Chip) -> der Browser zeigt die Abfrage zuverlässig */
+  function requestGeo() {
+    if (!navigator.geolocation) return;
+    geoHide = false; watchGeo();
+  }
+  function startGps() {
+    if (!navigator.geolocation) { geoNoApi = true; geoState = "unavail"; geoUi(); return; }
+    var q = navigator.permissions && navigator.permissions.query ? navigator.permissions.query({ name: "geolocation" }) : Promise.reject();
+    q.then(function (st) {
+      st.onchange = function () {
+        if (st.state === "granted") { if (geoWatch === null) watchGeo(); }
+        else if (geoState !== "ok" && geoWatch === null) { geoState = st.state === "denied" ? "denied" : "ask"; geoUi(); }
+      };
+      if (st.state === "granted") watchGeo();
+      else { geoState = st.state === "denied" ? "denied" : "ask"; geoUi(); }
+    }).catch(function () { whenCam(watchGeo); });   // Status unbekannt: erst nach der Kamera-Abfrage fragen
+  }
+  var camDone = false, afterCam = null;
+  function camSettle() { camDone = true; if (afterCam) { var f = afterCam; afterCam = null; f(); } }
+  function whenCam(f) { if (camDone || view !== "cam") f(); else afterCam = f; }
   var compassOn = false;
   function onOri(e) {
     var h = null;
@@ -395,7 +441,7 @@
     if (n === "NotAllowedError" || n === "SecurityError") msg = "Bitte den Kamerazugriff im Browser erlauben.";
     else if (n === "NotFoundError" || n === "OverconstrainedError") msg = "Auf diesem Gerät wurde keine Kamera gefunden.";
     else if (n === "NotReadableError") msg = "Die Kamera wird gerade von einer anderen App verwendet.";
-    $("#cam-fallback-msg").textContent = msg; $("#cam-fallback").hidden = false;
+    $("#cam-fallback-msg").textContent = msg; $("#cam-fallback").hidden = false; camSettle();
   }
   function startCamera() {
     if (camStream || camStarting) return;
@@ -404,7 +450,7 @@
     navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: S.facing }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false
     }).then(function (st) {
-      camStarting = false;
+      camStarting = false; camSettle();
       if (view !== "cam" || document.hidden) { st.getTracks().forEach(function (t) { t.stop(); }); return; }
       camStream = st; video.srcObject = st; $("#cam-fallback").hidden = true;
       var p = video.play(); if (p && p.catch) p.catch(function () {});
@@ -1030,7 +1076,12 @@
         .catch(function () { torchOn = false; });
     });
     $("#btn-pin").addEventListener("click", function () { openPicker("live"); });
-    $("#gps-chip").addEventListener("click", function () { openPicker("live"); });
+    $("#gps-chip").addEventListener("click", function () {
+      if (!hasLoc(loc) && (geoState === "ask" || geoState === "denied") ) requestGeo(); else openPicker("live");
+    });
+    $("#geo-ask-btn").addEventListener("click", requestGeo);
+    $("#geo-ask-man").addEventListener("click", function () { openPicker("live"); });
+    $("#geo-ask-x").addEventListener("click", function () { geoHide = true; geoUi(); });
     $("#btn-cam-retry").addEventListener("click", startCamera);
     $("#btn-cam-native").addEventListener("click", function () { $("#file-capture").click(); });
     var imp = function () { $("#file-import").click(); };
@@ -1075,7 +1126,7 @@
     $("#p-gps").addEventListener("click", function () {
       loc.manual = false; geoAt = mapAt = null; wxAt = 0; closeSheet();
       if (gpsRaw) setLoc(gpsRaw.latitude, gpsRaw.longitude, gpsRaw.altitude, gpsRaw.accuracy);
-      else { loc.lat = loc.lng = null; loc.place = loc.address = ""; loc.map = null; chip(); }
+      else { loc.lat = loc.lng = null; loc.place = loc.address = ""; loc.map = null; geoUi(); }
       toast("GPS-Standort wird wieder verwendet.");
     });
     $("#p-form").addEventListener("submit", function (e) {

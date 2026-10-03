@@ -80,6 +80,16 @@ if ("serviceWorker" in navigator) {
       </div>
     </div>
 
+    <div id="geo-ask" class="geo-ask" role="alert" hidden>
+      <button id="geo-ask-x" class="geo-ask-x" type="button" aria-label="Hinweis schließen">×</button>
+      <b id="geo-ask-h">Standort freigeben</b>
+      <p id="geo-ask-t"></p>
+      <div class="geo-ask-a">
+        <button id="geo-ask-btn" class="btn pri sm" type="button">Standort freigeben</button>
+        <button id="geo-ask-man" class="btn sm" type="button">Ort manuell wählen</button>
+      </div>
+    </div>
+
     <div id="cam-count" class="cam-count" hidden></div>
     <div id="cam-rec" class="cam-rec" hidden><i></i><span id="rec-time">00:00</span></div>
     <div id="cam-flash" class="cam-flash"></div>
