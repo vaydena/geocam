@@ -162,8 +162,6 @@ jobs:
             done
             if [ ${#still[@]} -gt 0 ]; then echo "::error::Nicht hochgeladen: ${still[*]}"; exit 1; fi
           fi
-          # Aufraeumen: gen_icons.py ging beim Erst-Deploy versehentlich mit hoch (* = Fehler ignorieren)
-          ftp -Q "*DELE $FTPDIR/gen_icons.py" "ftp://$FTPHOST/" -o /dev/null || true
           echo "Alle $n Dateien hochgeladen -> /$FTPDIR/"
 
       # Live-Pruefung ueber HTTPS (Cache-Buster + Browser-UA): Titel, Dateien, Marker.
@@ -173,17 +171,36 @@ jobs:
           SITE: https://geocam.vaydena.de
           UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
         run: |
-          bad=0
-          want=$(grep -o '<title>[^<]*</title>' index.html | head -1)
-          have=$(curl -s -A "$UA" "$SITE/index.html?cb=$RANDOM" | grep -o '<title>[^<]*</title>' | head -1)
-          echo "index.html Titel: lokal=$want live=$have"; [ "$want" = "$have" ] || bad=1
-          for f in index.html app.css app.js exif.js sw.js manifest.webmanifest vendor/leaflet/leaflet.js deploy-version.txt; do
-            loc=$(stat -c %s "$f"); res=$(curl -s -A "$UA" -o /dev/null -w '%{http_code} %{size_download}' "$SITE/$f?cb=$RANDOM")
-            echo "$f: lokal=$loc live=$res"; [ "$res" = "200 $loc" ] || bad=1
-          done
-          # Marker gegenpruefen (erste Zeile von deploy-version.txt muss live erscheinen)
+          # Sperrt der Hostinger-Bot-Schutz den Runner aus ("Checking your browser ..."),
+          # wird bis zu 3x erneut versucht; bleibt es gesperrt, gibt es nur eine Warnung,
+          # denn der Upload selbst wurde oben bereits Datei fuer Datei bestaetigt.
+          body=$(mktemp)
+          challenge='Checking your browser|Just a moment|cf-chl|captcha'
           marker=$(head -1 deploy-version.txt)
-          live_marker=$(curl -s -A "$UA" "$SITE/deploy-version.txt?cb=$RANDOM" | head -1)
-          echo "Marker: lokal=$marker live=$live_marker"; [ "$marker" = "$live_marker" ] || bad=1
-          if [ $bad -ne 0 ]; then echo "::error::Live-Stand weicht ab (siehe oben)."; exit 1; fi
-          echo "Live-Stand verifiziert ($marker)."
+          check() {
+            bad=0; blocked=0
+            want=$(grep -o '<title>[^<]*</title>' index.html | head -1)
+            code=$(curl -s -A "$UA" -o "$body" -w '%{http_code}' "$SITE/index.html?cb=$RANDOM")
+            have=$(grep -o '<title>[^<]*</title>' "$body" | head -1)
+            echo "index.html Titel: lokal=$want live=$code $have"
+            if grep -Eqi "$challenge" "$body"; then blocked=$((blocked+1)); elif [ "$want" != "$have" ]; then bad=1; fi
+            for f in index.html app.css app.js exif.js sw.js manifest.webmanifest vendor/leaflet/leaflet.js deploy-version.txt; do
+              loc=$(stat -c %s "$f"); res=$(curl -s -A "$UA" -o "$body" -w '%{http_code} %{size_download}' "$SITE/$f?cb=$RANDOM")
+              echo "$f: lokal=$loc live=$res"
+              if [ "$res" = "200 $loc" ]; then continue; fi
+              if [ "${res%% *}" != "200" ] && grep -Eqi "$challenge" "$body"; then blocked=$((blocked+1)); else bad=1; fi
+            done
+            # Marker gegenpruefen (erste Zeile von deploy-version.txt muss live erscheinen)
+            code=$(curl -s -A "$UA" -o "$body" -w '%{http_code}' "$SITE/deploy-version.txt?cb=$RANDOM")
+            live_marker=$(head -1 "$body" | cut -c1-80)
+            if grep -Eqi "$challenge" "$body"; then blocked=$((blocked+1)); echo "Marker: lokal=$marker live=(blockiert)"
+            else echo "Marker: lokal=$marker live=$live_marker"; [ "$marker" = "$live_marker" ] || bad=1; fi
+          }
+          for try in 1 2 3; do
+            check
+            if [ $bad -ne 0 ]; then echo "::error::Live-Stand weicht ab (siehe oben)."; exit 1; fi
+            if [ $blocked -eq 0 ]; then echo "Live-Stand verifiziert ($marker)."; exit 0; fi
+            echo "Bot-Schutz des Hosters hat $blocked Abrufe blockiert (Versuch $try/3)."
+            [ $try -lt 3 ] && sleep 30
+          done
+          echo "::warning::Live-Pruefung vom Bot-Schutz des Hosters blockiert - Upload war erfolgreich, bitte Seite kurz im Browser pruefen."
