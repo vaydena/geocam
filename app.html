@@ -30,7 +30,7 @@ if ("serviceWorker" in navigator) {
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="GeoCam">
 <link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
-<link rel="stylesheet" href="./app.css?v=4">
+<link rel="stylesheet" href="./app.css?v=5">
 </head>
 <body>
 
@@ -140,6 +140,12 @@ if ("serviceWorker" in navigator) {
   <section id="v-map" class="view mapview" hidden>
     <div id="map"></div>
     <div id="map-empty" class="map-empty" hidden>Noch keine Aufnahmen mit Standort.</div>
+    <div id="map-bar" class="map-bar" hidden>
+      <div class="map-cur"><b id="map-place"></b><span id="map-sub"></span></div>
+      <button id="map-open" class="btn sm pri" type="button">Öffnen</button>
+      <a id="map-ext" class="btn sm" target="_blank" rel="noopener">Google Maps</a>
+    </div>
+    <div id="map-strip" class="map-strip" hidden></div>
   </section>
 
   <!-- ===== Einstellungen ===== -->
@@ -217,7 +223,7 @@ if ("serviceWorker" in navigator) {
     <div class="card">
       <h2>Online-Dienste</h2>
       <label class="row"><span>Adresse und Ort online ermitteln</span><input type="checkbox" data-s="geocodeOnline"></label>
-      <p class="hint">Für Adresse, Mini-Karte und Karte wird der Standort an OpenStreetMap übermittelt, für das Wetter an Open-Meteo. Fotos und Videos verlassen das Gerät nicht. Ohne Internet werden Aufnahmen mit Koordinaten gespeichert und der Ort später ergänzt.</p>
+      <p class="hint">Für Adresse, Mini-Karte und Ortswahl wird der Standort an OpenStreetMap übermittelt, für das Wetter an Open-Meteo. Die Karte mit deinen Aufnahmen kommt von Google Maps – dabei wird der gezeigte Ort an Google übermittelt. Fotos und Videos verlassen das Gerät nicht. Ohne Internet werden Aufnahmen mit Koordinaten gespeichert und der Ort später ergänzt.</p>
     </div>
 
     <div class="card">
@@ -226,7 +232,7 @@ if ("serviceWorker" in navigator) {
       <button id="btn-wipe" class="btn danger" type="button">Alle Aufnahmen löschen</button>
     </div>
 
-    <p class="foot">GeoCam · Version 1.1 · Kartendaten © OpenStreetMap-Mitwirkende</p>
+    <p class="foot">GeoCam · Version 1.2 · Karte: Google Maps · Adressen und Mini-Karte © OpenStreetMap-Mitwirkende</p>
   </section>
 </main>
 
@@ -253,6 +259,7 @@ if ("serviceWorker" in navigator) {
       <button id="d-share" class="btn" type="button">Teilen</button>
       <button id="d-dl" class="btn" type="button">Herunterladen</button>
       <button id="d-loc" class="btn" type="button">Ort ändern</button>
+      <button id="d-addr" class="btn" type="button">Adresse ändern</button>
       <button id="d-qr" class="btn" type="button">QR-Code</button>
       <button id="d-park" class="btn" type="button">Als Parkplatz merken</button>
       <button id="d-stamp" class="btn" type="button" hidden>Stempel einbrennen</button>
@@ -303,9 +310,10 @@ if ("serviceWorker" in navigator) {
       </div>
       <a id="pk-nav" class="btn pri big" target="_blank" rel="noopener">
         <svg viewBox="0 0 24 24"><path d="M12 2 20 21l-8-4-8 4z"/></svg>Zurück zum Auto</a>
-      <p id="pk-noloc" class="pk-hint" hidden>Zu diesem Foto ist kein Ort gespeichert. Öffne die Aufnahme und setze ihn über „Ort ändern“.</p>
+      <p id="pk-noloc" class="pk-hint" hidden>Zu diesem Foto ist kein Ort gespeichert. Setze ihn über „Adresse ändern“.</p>
       <div class="d-actions">
         <button id="pk-qr" class="btn" type="button">QR-Code</button>
+        <button id="pk-addr" class="btn" type="button">Adresse ändern</button>
         <button id="pk-open" class="btn" type="button">Aufnahme öffnen</button>
       </div>
       <dl id="pk-info" class="d-info"></dl>
@@ -315,6 +323,28 @@ if ("serviceWorker" in navigator) {
       <button id="pk-end" class="btn danger" type="button">Parkplatz beenden</button>
       <p class="pk-hint">„Parkplatz beenden“ löst nur die Markierung – das Foto bleibt in der Galerie.</p>
     </div>
+  </div>
+</div>
+
+<!-- ===== Adresse ändern ===== -->
+<div id="addr" class="sheet" hidden>
+  <header class="bar">
+    <button id="a-cancel" class="btn sm" type="button">Abbrechen</button>
+    <h1>Adresse ändern</h1>
+    <button id="a-ok" class="btn sm pri" type="button">Speichern</button>
+  </header>
+  <div class="sheet-body">
+    <label class="col"><span>Ort / Bezeichnung</span>
+      <input id="a-place" type="text" maxlength="80" placeholder="z. B. Altstadt, Freising" autocomplete="off"></label>
+    <label class="col"><span>Adresse</span>
+      <textarea id="a-address" rows="3" maxlength="200" placeholder="Straße Hausnummer, PLZ Ort"></textarea></label>
+    <div id="a-coords" class="qr-coords a-coords"></div>
+    <div class="d-actions">
+      <button id="a-pos" class="btn" type="button">Position auf der Karte ändern</button>
+      <button id="a-auto" class="btn" type="button">Adresse automatisch ermitteln</button>
+    </div>
+    <p class="pk-hint">Ort und Adresse lassen sich frei überschreiben. Die Koordinaten – und damit Navigation und QR-Code – ändern sich nur über „Position auf der Karte ändern“.</p>
+    <p id="a-stamp" class="pk-hint" hidden>Der bereits ins Bild eingebrannte Stempel bleibt unverändert.</p>
   </div>
 </div>
 
@@ -328,6 +358,7 @@ if ("serviceWorker" in navigator) {
   <div class="sheet-body qr-body">
     <canvas id="qr-canvas" width="720" height="720"></canvas>
     <div id="qr-place" class="qr-place"></div>
+    <div id="qr-address" class="qr-coords"></div>
     <div id="qr-coords" class="qr-coords"></div>
     <p class="pk-hint">Mit der Handykamera scannen – der Code öffnet diesen Ort in Google Maps.</p>
     <div class="d-actions">
@@ -335,6 +366,7 @@ if ("serviceWorker" in navigator) {
       <button id="qr-save" class="btn" type="button">Als Bild speichern</button>
       <button id="qr-copy" class="btn" type="button">Link kopieren</button>
       <a id="qr-link" class="btn" target="_blank" rel="noopener">In Google Maps öffnen</a>
+      <button id="qr-addr" class="btn" type="button">Adresse ändern</button>
     </div>
   </div>
 </div>
@@ -349,7 +381,7 @@ if ("serviceWorker" in navigator) {
 <script src="./vendor/leaflet/leaflet.js"></script>
 <script src="./exif.js"></script>
 <script src="./vendor/qrcode/qrcode.js"></script>
-<script src="./app.js?v=4"></script>
+<script src="./app.js?v=5"></script>
 
 <script>
 /* Install-Affordanz – bewusst inline (nicht im SW-gecachten app.js) */

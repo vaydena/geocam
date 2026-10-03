@@ -324,13 +324,17 @@
   function refreshLocInfo() {
     if (!hasLoc(loc) || !online()) return;
     var here = { lat: loc.lat, lng: loc.lng };
-    if ((!geoAt || dist(geoAt, here) > 40) && Date.now() - geoFail > 30000) {
+    /* von Hand geänderte Adresse gilt, bis man sich deutlich vom Ort entfernt */
+    if (loc.addrManual && loc.addrAt && dist(loc.addrAt, here) > 150) {
+      loc.addrManual = false; loc.place = loc.city = loc.suburb = loc.address = ""; geoAt = null; ovDirty = true; chip();
+    }
+    if (!loc.addrManual && (!geoAt || dist(geoAt, here) > 40) && Date.now() - geoFail > 30000) {
       if (geoAt && dist(geoAt, here) > 1500) { loc.place = loc.city = loc.suburb = loc.address = ""; }
       geoAt = here;
       reverse(here.lat, here.lng).then(function (g) {
-        if (geoAt !== here) return;
+        if (geoAt !== here || loc.addrManual) return;
         loc.place = g.place; loc.city = g.city; loc.suburb = g.suburb; loc.address = g.address;
-        ovDirty = true; chip(); if (view === "set") drawPreview();
+        ovDirty = true; chip(); if (view === "set") drawPreview(); refreshOpen();
       }).catch(function () { if (geoAt === here) { geoAt = null; geoFail = Date.now(); } });
     }
     if (S.fields.map && (!mapAt || dist(mapAt, here) > 25)) {
@@ -514,7 +518,7 @@
     return { id: newId(), type: type, ts: d.date.getTime(), lat: hasLoc(d) ? d.lat : null, lng: hasLoc(d) ? d.lng : null,
       alt: d.alt, acc: d.acc, heading: d.heading, place: hasLoc(d) ? loc.place : "", city: hasLoc(d) ? loc.city : "",
       suburb: hasLoc(d) ? loc.suburb : "", address: hasLoc(d) ? loc.address : "", weather: d.weather || "", note: "",
-      project: S.project, stamped: true, geoPending: hasLoc(d) && !loc.place };
+      project: S.project, stamped: true, geoPending: hasLoc(d) && !loc.place && !loc.addrManual };
   }
   function addItem(meta, blob) {
     return putItem(meta, blob).then(function () {
@@ -765,54 +769,54 @@
     });
   }
 
-  /* ================= Karte ================= */
-  var map = null, mLayer = null, mapFitted = false;
-  function initMap() {
-    if (map) return;
-    map = L.map("map", { zoomControl: true, maxZoom: 19 }).setView([51.2, 10.4], 6);
-    L.tileLayer(OSM_TILES, { maxZoom: 19, attribution: OSM_ATTR }).addTo(map);
-    mLayer = L.layerGroup().addTo(map);
-    map.on("zoomend", renderMap);
+  /* ================= Karte (Google Maps) =================
+     Eingebettete Google-Maps-Karte ohne API-Schlüssel: Sie zeigt immer einen Ort. Die Aufnahmen
+     liegen als Bildleiste darunter – antippen springt auf der Karte zu diesem Ort. */
+  var mapSel = null, mapList = null, mapSrc = null;
+  function gmapUrl(lat, lng, z) {
+    return "https://www.google.com/maps?q=" + lat.toFixed(6) + "," + lng.toFixed(6) + "&z=" + z + "&hl=de&output=embed";
   }
-  function fitTo(list) {
-    var pts = list.filter(hasLoc).map(function (it) { return [it.lat, it.lng]; });
-    if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.25), { maxZoom: 16, animate: false });
+  /* iframe jedes Mal neu anlegen: ein geändertes src würde einen Verlaufseintrag erzeugen (Zurück-Taste der Sheets) */
+  function gmapShow(url) {
+    if (url === mapSrc) return; mapSrc = url;
+    var box = $("#map"); box.textContent = "";
+    if (!url) { var p = document.createElement("p"); p.textContent = "Die Google-Maps-Karte braucht eine Internetverbindung."; box.appendChild(p); return; }
+    var f = document.createElement("iframe");
+    f.title = "Google-Maps-Karte"; f.setAttribute("allowfullscreen", ""); f.referrerPolicy = "no-referrer"; f.src = url;
+    box.appendChild(f);
   }
   function renderMap() {
-    if (!map) return;
-    mLayer.clearLayers();
-    var pts = items.filter(hasLoc); $("#map-empty").hidden = pts.length > 0;
-    var z = map.getZoom(), cells = {};
-    pts.forEach(function (it) {
-      var p = map.project([it.lat, it.lng], z), k = Math.floor(p.x / 64) + ":" + Math.floor(p.y / 64);
-      (cells[k] || (cells[k] = [])).push(it);
-    });
-    Object.keys(cells).forEach(function (k) {
-      var l = cells[k], n = l.length, lat = 0, lng = 0;
-      l.forEach(function (it) { lat += it.lat / n; lng += it.lng / n; });
-      var icon = L.divIcon({ className: "", iconSize: [48, 48], iconAnchor: [24, 24],
-        html: '<div class="gc-m"><img alt="" src="' + l[0].thumb + '">' + (n > 1 ? "<b>" + n + "</b>" : "") + "</div>" });
-      L.marker([lat, lng], { icon: icon }).addTo(mLayer).on("click", function () { clusterClick(l, [lat, lng]); });
-    });
-    var pi = parkItem();
-    if (pi && hasLoc(pi)) {
-      L.marker([pi.lat, pi.lng], { zIndexOffset: 1000, icon: L.divIcon({ className: "", iconSize: [34, 34], iconAnchor: [17, 58],
-        html: '<div class="gc-park">P</div>' }) }).addTo(mLayer).on("click", openPark);
+    var all = items.filter(hasLoc);
+    var list = mapList ? mapList.filter(function (it) { return items.indexOf(it) >= 0 && hasLoc(it); }) : all;
+    if (mapList && !list.length) { mapList = null; list = all; }
+    if (list.indexOf(mapSel) < 0) mapSel = list[0] || null;
+    $("#map-empty").hidden = all.length > 0;
+    var strip = $("#map-strip"); strip.textContent = ""; strip.hidden = !list.length;
+    if (mapList && list.length < all.length) {
+      var ab = document.createElement("button"); ab.type = "button"; ab.className = "map-all"; ab.textContent = "Alle Orte";
+      ab.addEventListener("click", function () { mapList = null; renderMap(); }); strip.appendChild(ab);
     }
-  }
-  function clusterClick(l, center) {
-    if (l.length === 1) { openDetail(l[0].id); return; }
-    var b = L.latLngBounds(l.map(function (it) { return [it.lat, it.lng]; }));
-    var tz = Math.min(18, map.getBoundsZoom(b.pad(0.3)));
-    if (tz > map.getZoom() && b.getNorthEast().distanceTo(b.getSouthWest()) > 15) { map.setView(b.getCenter(), tz); return; }
-    var el = document.createElement("div"); el.className = "pop";
-    l.slice(0, 9).forEach(function (it) {
-      var bt = document.createElement("button"); bt.type = "button";
-      var im = document.createElement("img"); im.src = it.thumb; im.alt = it.place || "Aufnahme"; bt.appendChild(im);
-      bt.addEventListener("click", function () { map.closePopup(); openDetail(it.id); });
-      el.appendChild(bt);
+    var selEl = null;
+    list.forEach(function (it) {
+      var t = document.createElement("button"); t.type = "button"; t.className = "th" + (it === mapSel ? " on" : ""); t.dataset.id = it.id;
+      var im = document.createElement("img"); im.loading = "lazy"; im.alt = it.place || "Aufnahme"; im.src = it.thumb; t.appendChild(im);
+      if (it.type === "video") { var v = document.createElement("span"); v.className = "vid"; v.textContent = "▶"; t.appendChild(v); }
+      if (it.id === parkId) { var pk = document.createElement("span"); pk.className = "pk"; pk.textContent = "P"; t.appendChild(pk); }
+      t.addEventListener("click", function () { if (it === mapSel) openDetail(it.id); else { mapSel = it; renderMap(); } });
+      if (it === mapSel) selEl = t;
+      strip.appendChild(t);
     });
-    L.popup({ offset: [0, -18], minWidth: 200 }).setLatLng(center).setContent(el).openOn(map);
+    if (selEl) strip.scrollLeft = Math.max(0, selEl.offsetLeft - (strip.clientWidth - selEl.offsetWidth) / 2);
+    var bar = $("#map-bar"); bar.hidden = !mapSel;
+    if (mapSel) {
+      $("#map-place").textContent = mapSel.place || mapSel.address || fmtCoords(mapSel.lat, mapSel.lng);
+      $("#map-sub").textContent = [mapSel.place ? mapSel.address : "", fmtDate(new Date(mapSel.ts))].filter(Boolean).join(" · ");
+      $("#map-ext").href = mapsShow(mapSel);
+    }
+    if (navigator.onLine === false) gmapShow("");
+    else if (mapSel) gmapShow(gmapUrl(mapSel.lat, mapSel.lng, 17));
+    else if (hasLoc(loc)) gmapShow(gmapUrl(loc.lat, loc.lng, 14));
+    else gmapShow("https://www.google.com/maps?q=Deutschland&z=6&hl=de&output=embed");
   }
 
   /* ================= Sheets (Android-Zurück schließt) ================= */
@@ -918,7 +922,7 @@
     }).catch(function (e) { console.error(e); toast("Das Bild konnte nicht gestempelt werden."); }).then(unbusy);
   }
   function setItemLoc(it, lat, lng) {
-    it.lat = lat; it.lng = lng; it.alt = null; it.acc = null; it.place = it.city = it.suburb = it.address = ""; it.geoPending = true;
+    it.lat = lat; it.lng = lng; it.alt = null; it.acc = null; it.place = it.city = it.suburb = it.address = ""; it.geoPending = true; it.addrManual = false;
     var wasStamped = it.stamped;
     var geoP = online() ? reverse(lat, lng).then(function (g) {
       it.place = g.place; it.city = g.city; it.suburb = g.suburb; it.address = g.address; it.geoPending = false;
@@ -929,7 +933,8 @@
       .catch(function () { return null; }) : Promise.resolve(null);
     return Promise.all([geoP, blobP]).then(function (a) {
       return putItem(it, a[1]).then(function () {
-        if (cur && cur.it === it) { if (a[1]) cur.blob = a[1]; fillDetail(); }
+        if (cur && cur.it === it && a[1]) cur.blob = a[1];
+        refreshOpen();
         toast(wasStamped ? "Ort geändert. Der eingebrannte Stempel im Bild bleibt unverändert." : "Ort gespeichert.", 4500);
         backfill();
       });
@@ -966,9 +971,62 @@
     var s = pk.sel, t = pk.target; if (!s) return;
     closeSheet();
     if (t === "live") {
-      loc.manual = true; geoAt = mapAt = null; wxAt = 0; loc.place = loc.city = loc.suburb = loc.address = ""; loc.map = null; loc.weather = "";
-      setLoc(s.lat, s.lng, null, null); toast("Standort manuell gesetzt.");
+      loc.manual = true; loc.addrManual = false; geoAt = mapAt = null; wxAt = 0; loc.place = loc.city = loc.suburb = loc.address = ""; loc.map = null; loc.weather = "";
+      setLoc(s.lat, s.lng, null, null); refreshOpen(); toast("Standort manuell gesetzt.");
     } else setTimeout(function () { setItemLoc(t, s.lat, s.lng); }, 80);
+  }
+
+  /* ================= Adresse ändern (Aufnahme, Parkplatz, aktueller Standort) ================= */
+  var adT = null, adGeo = null;   // Ziel: Aufnahme oder "live"
+  function adObj() { return adT === "live" ? loc : adT; }
+  function fillAddr() {
+    var o = adObj(); if (!o) return;
+    var geo = hasLoc(o);
+    $("#a-place").value = o.place || ""; $("#a-address").value = o.address || "";
+    $("#a-coords").textContent = geo ? fmtCoords(o.lat, o.lng) : "Kein Standort gespeichert";
+    $("#a-pos").textContent = geo ? "Position auf der Karte ändern" : "Position auf der Karte setzen";
+    $("#a-auto").hidden = !geo;
+    $("#a-stamp").hidden = !(adT !== "live" && o.stamped);
+  }
+  function openAddr(t) {
+    if (!t) return;
+    adT = t; adGeo = null; fillAddr();
+    openSheet($("#addr"), function () { adT = null; adGeo = null; });
+  }
+  function addrAuto() {
+    var o = adObj(); if (!o || !hasLoc(o)) return;
+    if (!online()) { toast("Dafür wird eine Internetverbindung gebraucht – und „Adresse online ermitteln“ in den Einstellungen.", 5000); return; }
+    var t = adT; busy("Adresse wird ermittelt …");
+    reverse(o.lat, o.lng).then(function (g) {
+      if (adT !== t) return;
+      adGeo = g; $("#a-place").value = g.place || ""; $("#a-address").value = g.address || "";
+    }).catch(function () { toast("Die Adresse konnte gerade nicht ermittelt werden."); }).then(unbusy);
+  }
+  function addrSave() {
+    var t = adT, o = adObj(); if (!o) return;
+    var p = $("#a-place").value.trim(), a = $("#a-address").value.trim().replace(/\s*\n\s*/g, ", ");
+    var auto = adGeo && p === (adGeo.place || "") && a === (adGeo.address || "") ? adGeo : null;
+    closeSheet();
+    o.place = p; o.address = a;
+    if (auto) { o.city = auto.city; o.suburb = auto.suburb; }
+    if (t === "live") {
+      loc.addrManual = !auto; loc.addrAt = hasLoc(loc) ? { lat: loc.lat, lng: loc.lng } : null;
+      ovDirty = true; chip(); if (view === "set") drawPreview();
+      refreshOpen(); toast("Adresse geändert – sie gilt für die nächsten Aufnahmen an diesem Ort.", 4500);
+    } else {
+      o.geoPending = false; o.addrManual = !auto;
+      putItem(o).then(function () {
+        refreshOpen(); if (!cur && $("#park").hidden) render();
+        toast(o.stamped ? "Adresse geändert. Der eingebrannte Stempel im Bild bleibt unverändert." : "Adresse geändert.", 4500);
+      }).catch(saveErr);
+    }
+  }
+  /* offene Ansichten nach einer Orts-/Adressänderung neu füllen */
+  function refreshOpen() {
+    if (cur) fillDetail();
+    if (!$("#park").hidden) fillPark();
+    if (adT && !$("#addr").hidden) fillAddr();
+    if (qrCur && !$("#qr").hidden && hasLoc(qrCur.src)) qrFill(qrCur.src);
   }
 
   /* ================= Einstellungen ================= */
@@ -987,7 +1045,7 @@
     var c = $("#set-preview"), g = c.getContext("2d"), W = c.width, H = c.height;
     var sky = g.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, "#5b9bd5"); sky.addColorStop(0.62, "#cfe3f3"); sky.addColorStop(0.62, "#6b8f5a"); sky.addColorStop(1, "#3f5d3a");
     g.fillStyle = sky; g.fillRect(0, 0, W, H);
-    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg?v=4"; }
+    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg?v=5"; }
     if (_bg.complete && _bg.naturalWidth) {   /* Illustration der Freisinger Altstadt, formatfüllend */
       var k = Math.max(W / _bg.naturalWidth, H / _bg.naturalHeight), bw = _bg.naturalWidth * k, bh = _bg.naturalHeight * k;
       g.drawImage(_bg, (W - bw) / 2, (H - bh) / 2, bw, bh);
@@ -1138,7 +1196,7 @@
   }
 
   /* ================= Standort-QR-Code ================= */
-  var qrCur = null;   // {lat, lng, place, address, url}
+  var qrCur = null;   // {src, lat, lng, place, address, url} – src = Aufnahme oder loc (aktueller Standort)
   function qrDraw(c, text, pad) {
     var q = qrcode(0, "M"); q.addData(text); q.make();
     var n = q.getModuleCount(), g = c.getContext("2d"), W = c.width, quiet = 4;
@@ -1146,14 +1204,19 @@
     g.fillStyle = "#fff"; g.fillRect(0, 0, W, c.height); g.fillStyle = "#000";
     for (var r = 0; r < n; r++) for (var k = 0; k < n; k++) if (q.isDark(r, k)) g.fillRect(off + k * cell, off + r * cell, cell, cell);
   }
-  function openQr(o) {
-    if (!o || !hasLoc(o)) { toast("Dafür ist noch kein Standort bekannt."); return; }
-    var q = { lat: o.lat, lng: o.lng, place: o.place || "", address: o.address || "", url: mapsShow(o) };
-    try { qrDraw($("#qr-canvas"), q.url); } catch (e) { console.error(e); toast("Der QR-Code kann gerade nicht erzeugt werden."); return; }
+  function qrFill(o) {
+    var q = { src: o, lat: o.lat, lng: o.lng, place: o.place || "", address: o.address || "", url: mapsShow(o) };
+    try { qrDraw($("#qr-canvas"), q.url); } catch (e) { console.error(e); return false; }
     qrCur = q;
     $("#qr-place").textContent = q.place || q.address || "Standort";
+    $("#qr-address").textContent = q.place && q.address ? q.address : "";
     $("#qr-coords").textContent = fmtCoords(q.lat, q.lng);
     $("#qr-link").href = q.url;
+    return true;
+  }
+  function openQr(o) {
+    if (!o || !hasLoc(o)) { toast("Dafür ist noch kein Standort bekannt."); return; }
+    if (!qrFill(o)) { toast("Der QR-Code kann gerade nicht erzeugt werden."); return; }
     openSheet($("#qr"), function () { qrCur = null; });
   }
   /* Bild zum Weitergeben: QR-Code mit Ort und Koordinaten darunter */
@@ -1163,9 +1226,13 @@
     var g = c.getContext("2d"); g.fillStyle = "#0b1220"; g.textAlign = "center"; g.textBaseline = "middle";
     var t = q.place || q.address || "Standort"; g.font = "700 34px " + FONT;
     while (t.length > 4 && g.measureText(t).width > 660) t = t.slice(0, -2).trim() + "…";
-    g.fillText(t, 360, 752);
-    g.font = "400 26px " + FONT; g.fillStyle = "#334155"; g.fillText(fmtCoords(q.lat, q.lng), 360, 800);
-    g.font = "600 22px " + FONT; g.fillStyle = "#0f766e"; g.fillText("GeoCam · scannen öffnet Google Maps", 360, 852);
+    g.fillText(t, 360, 746);
+    g.font = "400 24px " + FONT; g.fillStyle = "#334155";
+    var ad = q.place && q.address ? q.address : "";
+    while (ad.length > 4 && g.measureText(ad).width > 660) ad = ad.slice(0, -2).trim() + "…";
+    if (ad) g.fillText(ad, 360, 784);
+    g.fillText(fmtCoords(q.lat, q.lng), 360, ad ? 816 : 800);
+    g.font = "600 22px " + FONT; g.fillStyle = "#0f766e"; g.fillText("GeoCam · scannen öffnet Google Maps", 360, 860);
     return canvasBlob(c, "image/png");
   }
   function qrName(q) {
@@ -1205,12 +1272,8 @@
     if (v === "cam") startCamera(); else stopCamera();
     if (v === "gal") renderGallery();
     if (v === "map") {
-      initMap(); map.invalidateSize();
-      if (focus) { fitTo(focus); mapFitted = true; }
-      else if (!mapFitted) {
-        if (items.some(hasLoc)) { fitTo(items); mapFitted = true; }
-        else if (hasLoc(loc)) map.setView([loc.lat, loc.lng], 13, { animate: false });
-      }
+      mapList = focus && focus.length ? focus : null;
+      if (mapList) mapSel = mapList[0];
       renderMap();
     }
     if (v === "set") { drawPreview(); storageInfo(); }
@@ -1241,7 +1304,7 @@
     });
     $("#park-arm-x").addEventListener("click", function () { armPark(false); });
     $("#gps-chip").addEventListener("click", function () {
-      if (!hasLoc(loc) && geoState !== "ok") requestGeo(); else openPicker("live");
+      if (!hasLoc(loc) && geoState !== "ok") requestGeo(); else if (hasLoc(loc)) openAddr("live"); else openPicker("live");
     });
     $("#geo-ask-btn").addEventListener("click", requestGeo);
     $("#geo-ask-man").addEventListener("click", function () { openPicker("live"); });
@@ -1268,7 +1331,7 @@
     $("#btn-wipe").addEventListener("click", function () {
       if (!items.length || !confirm("Wirklich alle " + items.length + " Aufnahmen endgültig löschen?")) return;
       tx(["media", "blobs"], "readwrite", function (t) { t.objectStore("media").clear(); t.objectStore("blobs").clear(); })
-        .then(function () { items = []; mapFitted = false; setPark(null); render(); toast("Alle Aufnahmen gelöscht."); }).catch(saveErr);
+        .then(function () { items = []; mapSel = null; mapList = null; setPark(null); render(); toast("Alle Aufnahmen gelöscht."); }).catch(saveErr);
     });
     /* Detail */
     $("#d-close").addEventListener("click", closeSheet);
@@ -1286,6 +1349,7 @@
     $("#d-share").addEventListener("click", function () { if (cur) share(); });
     $("#d-dl").addEventListener("click", function () { if (cur) download(cur.blob, fileName(cur.it)); });
     $("#d-loc").addEventListener("click", function () { if (cur) openPicker(cur.it); });
+    $("#d-addr").addEventListener("click", function () { if (cur) openAddr(cur.it); });
     $("#d-stamp").addEventListener("click", function () { if (cur) burnStamp(); });
     $("#d-qr").addEventListener("click", function () { if (cur) openQr(cur.it); });
     $("#d-park").addEventListener("click", function () {
@@ -1300,6 +1364,7 @@
     $("#pk-new").addEventListener("click", parkShoot);
     $("#pk-nav").addEventListener("click", function (e) { var it = parkItem(); if (!it || !hasLoc(it)) e.preventDefault(); });
     $("#pk-qr").addEventListener("click", function () { var it = parkItem(); if (it) openQr(it); });
+    $("#pk-addr").addEventListener("click", function () { openAddr(parkItem()); });
     $("#pk-open").addEventListener("click", function () { if (parkItem()) openDetail(parkId); });
     $("#pk-note").addEventListener("change", function () { var it = parkItem(); if (!it) return; it.note = $("#pk-note").value.trim(); putItem(it).catch(saveErr); });
     $("#pk-end").addEventListener("click", function () {
@@ -1314,14 +1379,23 @@
       qrCard(q).then(function (b) { download(b, qrName(q)); }).catch(function () { toast("Der QR-Code konnte nicht gespeichert werden."); });
     });
     $("#qr-copy").addEventListener("click", qrCopy);
+    $("#qr-addr").addEventListener("click", function () { if (qrCur) openAddr(qrCur.src === loc ? "live" : qrCur.src); });
+    /* Adresse ändern */
+    $("#a-cancel").addEventListener("click", closeSheet);
+    $("#a-ok").addEventListener("click", addrSave);
+    $("#a-auto").addEventListener("click", addrAuto);
+    $("#a-pos").addEventListener("click", function () { if (adT) openPicker(adT); });
+    $("#map-open").addEventListener("click", function () { if (mapSel) openDetail(mapSel.id); });
     $("#d-note").addEventListener("change", function () { if (!cur) return; cur.it.note = $("#d-note").value.trim(); putItem(cur.it).catch(saveErr); });
     /* Ortswahl */
     $("#p-cancel").addEventListener("click", closeSheet);
     $("#p-ok").addEventListener("click", pickerOk);
     $("#p-gps").addEventListener("click", function () {
-      loc.manual = false; geoAt = mapAt = null; wxAt = 0; closeSheet();
+      loc.manual = false; loc.addrManual = false; geoAt = mapAt = null; wxAt = 0; closeSheet();
+      loc.place = loc.city = loc.suburb = loc.address = "";
       if (gpsRaw) setLoc(gpsRaw.latitude, gpsRaw.longitude, gpsRaw.altitude, gpsRaw.accuracy);
-      else { loc.lat = loc.lng = null; loc.place = loc.address = ""; loc.map = null; geoUi(); }
+      else { loc.lat = loc.lng = null; loc.map = null; geoUi(); }
+      refreshOpen();
       toast("GPS-Standort wird wieder verwendet.");
     });
     $("#p-form").addEventListener("submit", function (e) {
@@ -1336,7 +1410,8 @@
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) { if (!rec) stopCamera(); } else if (view === "cam") startCamera();
     });
-    window.addEventListener("online", function () { refreshLocInfo(); backfill(); });
+    window.addEventListener("online", function () { refreshLocInfo(); backfill(); if (view === "map") renderMap(); });
+    window.addEventListener("offline", function () { if (view === "map") renderMap(); });
   }
 
   /* ================= Start ================= */
