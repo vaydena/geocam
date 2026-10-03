@@ -17,7 +17,7 @@
       compass: false, weather: true, project: false, note: false },
     project: "", note: "", logoPos: "tr", logoSize: 18,
     exif: true, audio: true, stampImport: true, quality: 0.92,
-    hiRes: true, keepOrig: true, maxRec: 10, mapMode: "ov",
+    hiRes: true, keepOrig: true, maxRec: 10, mapView: "g",
     groupBy: "city", geocodeOnline: true,
     timer: 0, mode: "photo", facing: "environment", sort: "place"
   };
@@ -1064,7 +1064,7 @@
       $("#map-sub").textContent = [mapSel.place ? mapSel.address : "", fmtDate(new Date(mapSel.ts))].filter(Boolean).join(" · ");
       $("#map-ext").href = mapsShow(mapSel);
     }
-    var ov = S.mapMode !== "g" && !!window.L;
+    var ov = S.mapView !== "g" && !!window.L;
     $$("#map-mode button").forEach(function (b) { b.classList.toggle("on", (b.dataset.mode === "g") !== ov); });
     $("#map-ov").hidden = !ov; $("#map").hidden = ov;
     if (ov) { ovShow(list); return; }
@@ -1339,7 +1339,7 @@
     var c = $("#set-preview"), g = c.getContext("2d"), W = c.width, H = c.height;
     var sky = g.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, "#5b9bd5"); sky.addColorStop(0.62, "#cfe3f3"); sky.addColorStop(0.62, "#6b8f5a"); sky.addColorStop(1, "#3f5d3a");
     g.fillStyle = sky; g.fillRect(0, 0, W, H);
-    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg?v=6"; }
+    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg?v=7"; }
     if (_bg.complete && _bg.naturalWidth) {   /* Illustration der Freisinger Altstadt, formatfüllend */
       var k = Math.max(W / _bg.naturalWidth, H / _bg.naturalHeight), bw = _bg.naturalWidth * k, bh = _bg.naturalHeight * k;
       g.drawImage(_bg, (W - bw) / 2, (H - bh) / 2, bw, bh);
@@ -1685,7 +1685,7 @@
     cv.addEventListener("touchcancel", function () { pinch = null; });
     /* Karte: Übersicht (alle Pins) oder Google Maps */
     $$("#map-mode button").forEach(function (b) {
-      b.addEventListener("click", function () { S.mapMode = b.dataset.mode; saveS(); ovFit = true; renderMap(); });
+      b.addEventListener("click", function () { S.mapView = b.dataset.mode; saveS(); ovFit = true; renderMap(); });
     });
     $$("#gal-sort button").forEach(function (b) {
       b.classList.toggle("on", b.dataset.sort === S.sort);

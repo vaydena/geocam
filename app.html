@@ -30,7 +30,7 @@ if ("serviceWorker" in navigator) {
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="GeoCam">
 <link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
-<link rel="stylesheet" href="./app.css?v=6">
+<link rel="stylesheet" href="./app.css?v=7">
 </head>
 <body>
 
@@ -155,8 +155,8 @@ if ("serviceWorker" in navigator) {
   <!-- ===== Karte ===== -->
   <section id="v-map" class="view mapview" hidden>
     <div class="seg" id="map-mode">
-      <button type="button" data-mode="ov" class="on">Übersicht</button>
-      <button type="button" data-mode="g">Google Maps</button>
+      <button type="button" data-mode="ov">Übersicht</button>
+      <button type="button" data-mode="g" class="on">Google Maps</button>
     </div>
     <div id="map-ov" hidden></div>
     <div id="map"></div>
@@ -421,7 +421,7 @@ if ("serviceWorker" in navigator) {
 <script src="./vendor/leaflet/leaflet.js"></script>
 <script src="./exif.js"></script>
 <script src="./vendor/qrcode/qrcode.js"></script>
-<script src="./app.js?v=6"></script>
+<script src="./app.js?v=7"></script>
 
 <script>
 /* Install-Affordanz – bewusst inline (nicht im SW-gecachten app.js) */
