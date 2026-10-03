@@ -104,6 +104,7 @@ jobs:
                      -not -name 'deploy-local.ps1' \
                      -not -name 'deploy-local.log' \
                      -not -name 'README.md' \
+                     -not -name 'gen_icons.py' \
                      -not -name '.gitignore' \
                    | sed 's|^\./||' | sort)
           n=${#FILES[@]}; echo "Dateien: $n"
@@ -161,6 +162,8 @@ jobs:
             done
             if [ ${#still[@]} -gt 0 ]; then echo "::error::Nicht hochgeladen: ${still[*]}"; exit 1; fi
           fi
+          # Aufraeumen: gen_icons.py ging beim Erst-Deploy versehentlich mit hoch (* = Fehler ignorieren)
+          ftp -Q "*DELE $FTPDIR/gen_icons.py" "ftp://$FTPHOST/" -o /dev/null || true
           echo "Alle $n Dateien hochgeladen -> /$FTPDIR/"
 
       # Live-Pruefung ueber HTTPS (Cache-Buster + Browser-UA): Titel, Dateien, Marker.
