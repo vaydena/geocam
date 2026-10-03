@@ -589,6 +589,7 @@
   function addItem(meta, blob) {
     return putItem(meta, blob).then(function () {
       items.push(meta); items.sort(function (a, b) { return b.ts - a.ts; });
+      if (hasLoc(meta)) { mapSel = meta; mapList = null; }   /* neue Aufnahme ist auf der Karte sofort die gewählte */
       lastThumb(); persistOnce(); backfill();
       return meta;
     });
@@ -1029,13 +1030,32 @@
   }
   /* iframe jedes Mal neu anlegen: ein geändertes src würde einen Verlaufseintrag erzeugen (Zurück-Taste der Sheets) */
   function gmapShow(url) {
-    if (url === mapSrc) return; mapSrc = url;
+    if (url === mapSrc) return false; mapSrc = url;
     var box = $("#map"); box.textContent = "";
-    if (!url) { var p = document.createElement("p"); p.textContent = "Die Google-Maps-Karte braucht eine Internetverbindung."; box.appendChild(p); return; }
+    if (!url) { var p = document.createElement("p"); p.textContent = "Die Google-Maps-Karte braucht eine Internetverbindung."; box.appendChild(p); return true; }
     var f = document.createElement("iframe");
     f.title = "Google-Maps-Karte"; f.setAttribute("allowfullscreen", ""); f.referrerPolicy = "no-referrer"; f.src = url;
     box.appendChild(f);
+    return true;
   }
+  /* Foto der gewählten Aufnahme über der Stecknadel. Die eingebettete Karte meldet kein Verschieben –
+     sobald sie berührt wird (Fokus wandert ins iframe), rückt das Foto in die Ecke, statt falsch zu zeigen. */
+  function gmapPhoto(it, fresh) {
+    var box = $("#map"), b = $(".gc-bub", box);
+    if (!it) { if (b) b.remove(); return; }
+    if (!b) {
+      b = document.createElement("button"); b.type = "button"; b.className = "gc-bub"; b.appendChild(document.createElement("img"));
+      b.addEventListener("click", function () { if (mapSel) openDetail(mapSel.id); });
+      box.appendChild(b); fresh = true;
+    }
+    if (fresh) b.classList.remove("dock");
+    var im = b.firstChild; im.src = it.thumb; im.alt = it.place || "Aufnahme";
+    b.title = "Aufnahme öffnen";
+  }
+  window.addEventListener("blur", function () {
+    var a = document.activeElement, b = $("#map .gc-bub");
+    if (b && a && a.tagName === "IFRAME" && $("#map").contains(a)) b.classList.add("dock");
+  });
   function renderMap() {
     var all = items.filter(hasLoc);
     var list = mapList ? mapList.filter(function (it) { return items.indexOf(it) >= 0 && hasLoc(it); }) : all;
@@ -1068,8 +1088,8 @@
     $$("#map-mode button").forEach(function (b) { b.classList.toggle("on", (b.dataset.mode === "g") !== ov); });
     $("#map-ov").hidden = !ov; $("#map").hidden = ov;
     if (ov) { ovShow(list); return; }
-    if (navigator.onLine === false) gmapShow("");
-    else if (mapSel) gmapShow(gmapUrl(mapSel.lat, mapSel.lng, 17));
+    if (navigator.onLine === false) { gmapShow(""); gmapPhoto(null); }
+    else if (mapSel) gmapPhoto(mapSel, gmapShow(gmapUrl(mapSel.lat, mapSel.lng, 17)));
     else if (hasLoc(loc)) gmapShow(gmapUrl(loc.lat, loc.lng, 14));
     else gmapShow("https://www.google.com/maps?q=Deutschland&z=6&hl=de&output=embed");
   }
@@ -1088,9 +1108,12 @@
     list.forEach(function (it) {
       var park = it.id === parkId, on = it === mapSel;
       pts.push([it.lat, it.lng]);
+      /* Marker = Vorschaubild der Aufnahme (Parkplatz zusätzlich mit „P") */
+      var el = document.createElement("div"); el.className = "gc-ph" + (on ? " sel" : "");
+      var im = document.createElement("img"); im.alt = ""; im.src = it.thumb; el.appendChild(im);
+      if (park) { var pb = document.createElement("b"); pb.textContent = "P"; el.appendChild(pb); }
       L.marker([it.lat, it.lng], { zIndexOffset: on ? 1000 : park ? 500 : 0, title: it.place || "Aufnahme",
-        icon: park ? L.divIcon({ className: "", html: '<div class="gc-park' + (on ? " sel" : "") + '">P</div>', iconSize: [34, 34], iconAnchor: [17, 46] })
-          : L.divIcon({ className: "", html: '<div class="gc-pin' + (on ? " sel" : "") + '"></div>', iconSize: [22, 22], iconAnchor: [11, 22] }) })
+        icon: L.divIcon({ className: "", html: el, iconSize: [48, 48], iconAnchor: [24, 57] }) })
         .on("click", function () { if (it === mapSel) return; mapSel = it; renderMap(); }).addTo(ovLayer);
     });
     if (ovFit) {
@@ -1339,7 +1362,7 @@
     var c = $("#set-preview"), g = c.getContext("2d"), W = c.width, H = c.height;
     var sky = g.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, "#5b9bd5"); sky.addColorStop(0.62, "#cfe3f3"); sky.addColorStop(0.62, "#6b8f5a"); sky.addColorStop(1, "#3f5d3a");
     g.fillStyle = sky; g.fillRect(0, 0, W, H);
-    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg?v=7"; }
+    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg?v=8"; }
     if (_bg.complete && _bg.naturalWidth) {   /* Illustration der Freisinger Altstadt, formatfüllend */
       var k = Math.max(W / _bg.naturalWidth, H / _bg.naturalHeight), bw = _bg.naturalWidth * k, bh = _bg.naturalHeight * k;
       g.drawImage(_bg, (W - bw) / 2, (H - bh) / 2, bw, bh);
