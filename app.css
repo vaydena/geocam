@@ -205,3 +205,34 @@ input:focus,textarea:focus,select:focus{border-color:var(--acc)}
 /* Sheets liegen sonst in DOM-Reihenfolge: Adresse über Detail/Parkplatz/QR, Ortswahl über Adresse */
 #addr{z-index:1010}
 #picker{z-index:1020}
+
+/* ===== v1.3: Zoom, Filter, Mehrfachauswahl, Übersichtskarte, Parkuhr ===== */
+#cam-canvas{touch-action:none}
+.gal-filt{display:flex;gap:8px}
+.gal-filt select{flex:1;min-width:0;padding:8px 8px;font-size:13px}
+.bar .btn.sm{flex:none}
+.selecting #gal-list{padding-bottom:70px}
+.selecting .th::after{content:"";position:absolute;right:6px;top:6px;width:22px;height:22px;border-radius:50%;border:2px solid #fff;background:rgba(0,0,0,.35);box-sizing:border-box}
+.selecting .th.sel{outline:3px solid var(--acc);outline-offset:-3px}
+.selecting .th.sel::after{content:"✓";background:var(--acc);border-color:var(--acc);color:#04201d;font-weight:800;font-size:14px;line-height:18px;text-align:center}
+.selecting .th.sel img{opacity:.75}
+.selecting .th .pk{right:auto;left:5px}
+.sel-bar{position:sticky;bottom:10px;z-index:6;display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--acc);border-radius:14px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.sel-bar span{flex:1;min-width:0;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sel-bar .btn{flex:none;padding-left:10px;padding-right:10px}
+.sel-bar .btn:disabled{opacity:.45}
+.mapview #map-mode{flex:none;margin:calc(8px + var(--sat)) 10px 8px}
+.mapview #map-ov{flex:1;min-height:0;position:relative;background:#dfe7ea;z-index:0}
+.gc-me{width:18px;height:18px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 0 6px rgba(37,99,235,.25);box-sizing:border-box}
+.gc-pin.sel{background:var(--acc);width:28px;height:28px;margin:-6px 0 0 -3px}
+.gc-park.sel{box-shadow:0 0 0 3px var(--acc),0 3px 10px rgba(0,0,0,.5)}
+.pk-meter{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.pk-meter > b{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+#pk-meter-info{font-weight:600}
+#pk-meter-info.warn{color:var(--red)}
+.pk-meter-b{display:flex;gap:6px;align-items:center}
+.pk-meter-b .btn{flex:none}
+.pk-meter-b input{flex:1;min-width:0;width:auto;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:7px 8px;color:inherit;font:inherit}
+#pk-meter-x{align-self:flex-start}
+
+.mapview .map-empty{top:calc(62px + var(--sat))}

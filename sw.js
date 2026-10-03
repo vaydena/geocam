@@ -7,18 +7,18 @@
    - Dokumente (HTML): Netz zuerst, offline Rückfall auf den Cache.
    - Statische Assets: Cache zuerst, sonst Netz + nachlegen. */
 
-const CACHE = "geocam-app-v5";   // <-- bei jedem Asset-/Code-Deploy die Zahl erhöhen (v2, v3, ...) UND ?v= an app.js/app.css/Bild in app.html, app.js, SHELL
+const CACHE = "geocam-app-v6";   // <-- bei jedem Asset-/Code-Deploy die Zahl erhöhen (v2, v3, ...) UND ?v= an app.js/app.css/Bild in app.html, app.js, SHELL
 const SHELL = [
   "./index.html",
   "./app.html",
   "./landing.css",
-  "./app.css?v=5",
-  "./app.js?v=5",
+  "./app.css?v=6",
+  "./app.js?v=6",
   "./exif.js",
   "./vendor/leaflet/leaflet.js",
   "./vendor/leaflet/leaflet.css",
   "./vendor/qrcode/qrcode.js",
-  "./preview-freising.jpg?v=5",
+  "./preview-freising.jpg?v=6",
   "./hero-freising.jpg",
   "./manifest.webmanifest",
   "./icon-192.png",
@@ -84,6 +84,18 @@ self.addEventListener("fetch", (event) => {
         }
         return res;
       });
+    })
+  );
+});
+
+// Parkuhr-Mitteilung angetippt: offenes GeoCam-Fenster nach vorn holen, sonst die App beim Parkplatz öffnen
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = event.notification.data || "./app.html?go=park";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      const open = list.find((c) => c.url.includes("app.html"));
+      return open ? open.focus() : self.clients.openWindow(url);
     })
   );
 });

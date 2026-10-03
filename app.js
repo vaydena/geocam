@@ -17,6 +17,7 @@
       compass: false, weather: true, project: false, note: false },
     project: "", note: "", logoPos: "tr", logoSize: 18,
     exif: true, audio: true, stampImport: true, quality: 0.92,
+    hiRes: true, keepOrig: true, maxRec: 10, mapMode: "ov",
     groupBy: "city", geocodeOnline: true,
     timer: 0, mode: "photo", facing: "environment", sort: "place"
   };
@@ -66,9 +67,13 @@
   function getBlob(id) { return tx(["blobs"], "readonly", function (t) { return t.objectStore("blobs").get(id); }); }
   function delItem(id) {
     return tx(["media", "blobs"], "readwrite", function (t) {
-      t.objectStore("media").delete(id); t.objectStore("blobs").delete(id);
+      t.objectStore("media").delete(id); t.objectStore("blobs").delete(id); t.objectStore("blobs").delete(id + ORIG);
     });
   }
+  /* ungestempeltes Original (Key id + ":orig") – damit sich der Stempel nach „Ort/Adresse ändern" neu setzen lässt */
+  var ORIG = ":orig";
+  function putOrig(id, blob) { return tx(["blobs"], "readwrite", function (t) { t.objectStore("blobs").put(blob, id + ORIG); }); }
+  function getOrig(id) { return getBlob(id + ORIG); }
 
   /* ================= Zustand ================= */
   var items = [];                 // Metadaten, neueste zuerst
@@ -452,7 +457,44 @@
     else if (n === "NotReadableError") msg = "Die Kamera wird gerade von einer anderen App verwendet.";
     $("#cam-fallback-msg").textContent = msg; $("#cam-fallback").hidden = false; camSettle();
   }
+  /* Bildschirm wach halten, solange die Kamera läuft (das System gibt die Sperre beim Verlassen selbst frei) */
+  var wake = null, wakeReq = false;
+  function wakeOn() {
+    if (!navigator.wakeLock || wake || wakeReq || document.hidden) return;
+    wakeReq = true;
+    navigator.wakeLock.request("screen").then(function (w) {
+      wakeReq = false;
+      if (view !== "cam") { w.release().catch(function () {}); return; }
+      wake = w; w.addEventListener("release", function () { if (wake === w) wake = null; });
+    }).catch(function () { wakeReq = false; });
+  }
+  function wakeOff() { if (wake) { var w = wake; wake = null; w.release().catch(function () {}); } }
+  /* Zoom über die Kamera selbst (nur wenn das Gerät es anbietet): Zwei-Finger-Geste oder Knopf */
+  var zoomCaps = null, zoomV = 1, zoomT = 0, pinch = null;
+  function zoomLbl() {
+    var b = $("#btn-zoom"); b.hidden = !zoomCaps;
+    if (zoomCaps) { $("#zoom-lbl").textContent = de(zoomV / zoomCaps.min, zoomV / zoomCaps.min < 10 ? 1 : 0).replace(/,0$/, "") + "×"; b.classList.toggle("on", zoomV > zoomCaps.min + 0.01); }
+  }
+  function setZoom(v) {
+    if (!zoomCaps || !camStream) return;
+    v = Math.max(zoomCaps.min, Math.min(zoomCaps.max, v));
+    if (Math.abs(v - zoomV) < 0.005) return;
+    zoomV = v; zoomLbl();
+    clearTimeout(zoomT);
+    zoomT = setTimeout(function () {
+      var tr = camStream && camStream.getVideoTracks()[0];
+      if (tr) tr.applyConstraints({ advanced: [{ zoom: zoomV }] }).catch(function () {});
+    }, 40);
+  }
+  function zoomStep() {
+    if (!zoomCaps) return;
+    var f = zoomV / zoomCaps.min, steps = [1, 2, 4, 8].filter(function (s) { return s * zoomCaps.min <= zoomCaps.max + 0.01; });
+    var nx = steps.filter(function (s) { return s > f + 0.05; })[0] || 1;
+    setZoom(nx * zoomCaps.min);
+  }
+  function touchDist(e) { var a = e.touches[0], b = e.touches[1]; return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); }
   function startCamera() {
+    wakeOn();
     if (camStream || camStarting) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camFail(null); return; }
     camStarting = true;
@@ -465,11 +507,14 @@
       var p = video.play(); if (p && p.catch) p.catch(function () {});
       var tr = st.getVideoTracks()[0], caps = tr && tr.getCapabilities ? tr.getCapabilities() : {};
       torchOn = false; $("#btn-torch").hidden = !caps.torch; $("#btn-torch").classList.remove("on");
+      zoomCaps = caps.zoom && caps.zoom.max > caps.zoom.min ? { min: caps.zoom.min || 1, max: caps.zoom.max } : null;
+      zoomV = zoomCaps ? zoomCaps.min : 1; zoomLbl();
       cancelAnimationFrame(raf); raf = requestAnimationFrame(loop);
     }).catch(function (e) { camStarting = false; camFail(e); });
   }
   function stopCamera() {
     if (rec) stopRec();
+    wakeOff();
     cancelAnimationFrame(raf);
     if (camStream) { camStream.getTracks().forEach(function (t) { t.stop(); }); camStream = null; video.srcObject = null; }
   }
@@ -514,6 +559,27 @@
       });
     });
   }
+  /* Bild ohne Stempel als JPEG (das „Original" zum späteren Neu-Stempeln) */
+  function plainJpeg(src, sw, sh, maxSide) {
+    var k = maxSide && Math.max(sw, sh) > maxSide ? maxSide / Math.max(sw, sh) : 1;
+    var c = document.createElement("canvas"); c.width = Math.round(sw * k); c.height = Math.round(sh * k);
+    c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+    return canvasBlob(c, "image/jpeg", S.quality);
+  }
+  /* Stempel aus dem Original neu setzen (nach „Ort/Adresse ändern"). Liefert den neuen Blob oder null, wenn kein Original da ist */
+  function restamp(it) {
+    if (!it.orig || it.type !== "photo") return Promise.resolve(null);
+    return getOrig(it.id).then(function (ob) {
+      if (!ob) return null;
+      return Promise.all([decodeImage(ob), dataFor(it)]).then(function (a) {
+        var sz = imgSize(a[0]);
+        return renderStamped(a[0], sz.w, sz.h, a[1]);
+      }).then(function (r) {
+        it.w = r.canvas.width; it.h = r.canvas.height; it.thumb = thumbOf(r.canvas, it.w, it.h);
+        return r.blob;
+      });
+    }).catch(function (e) { console.warn("restamp", e); return null; });
+  }
   function metaFromLive(d, type) {
     return { id: newId(), type: type, ts: d.date.getTime(), lat: hasLoc(d) ? d.lat : null, lng: hasLoc(d) ? d.lng : null,
       alt: d.alt, acc: d.acc, heading: d.heading, place: hasLoc(d) ? loc.place : "", city: hasLoc(d) ? loc.city : "",
@@ -532,10 +598,31 @@
     if (!camStream || !video.videoWidth) { toast("Kamera ist noch nicht bereit."); return; }
     var fl = $("#cam-flash"); fl.classList.remove("go"); void fl.offsetWidth; fl.classList.add("go");
     var d = liveData(), vw = video.videoWidth, vh = video.videoHeight;
-    renderStamped(video, vw, vh, d).then(function (r) {
+    /* sofort ein Standbild sichern (Rückfall) – das Foto in voller Sensorauflösung kommt etwas später */
+    var frame = document.createElement("canvas"); frame.width = vw; frame.height = vh;
+    frame.getContext("2d").drawImage(video, 0, 0, vw, vh);
+    var tr = camStream.getVideoTracks()[0], src = { im: frame, w: vw, h: vh };
+    var hi = S.hiRes && window.ImageCapture && tr ? new Promise(function (res) {
+      var t = setTimeout(function () { res(null); }, 5000);
+      try {
+        new ImageCapture(tr).takePhoto().then(decodeImage).then(function (im) {
+          clearTimeout(t); var sz = imgSize(im);
+          res(sz.w * sz.h > vw * vh ? { im: im, w: sz.w, h: sz.h } : null);
+        }).catch(function () { clearTimeout(t); res(null); });
+      } catch (e) { clearTimeout(t); res(null); }
+    }) : Promise.resolve(null);
+    var orig = null;
+    hi.then(function (h) {
+      if (h) src = h;
+      return S.keepOrig ? plainJpeg(src.im, src.w, src.h, 4096).then(function (b) { orig = b; }).catch(function () {}) : null;
+    }).then(function () {
+      return renderStamped(src.im, src.w, src.h, d, 4096);
+    }).then(function (r) {
       var m = metaFromLive(d, "photo");
-      m.mime = "image/jpeg"; m.w = vw; m.h = vh; m.thumb = thumbOf(r.canvas, vw, vh);
+      m.mime = "image/jpeg"; m.w = r.canvas.width; m.h = r.canvas.height; m.thumb = thumbOf(r.canvas, m.w, m.h);
       return addItem(m, r.blob).then(function () {
+        return orig ? putOrig(m.id, orig).then(function () { m.orig = true; return putItem(m); }).catch(function () {}) : null;
+      }).then(function () {
         if (parkArmed) {
           armPark(false);
           return setPark(m.id).then(function () {
@@ -576,9 +663,27 @@
         addItem(m, blob).then(function () { toast("Video gespeichert."); }).catch(saveErr);
       };
       recStart = Date.now(); rec.start(1000);
-      $("#v-cam").classList.add("rec"); $("#cam-rec").hidden = false; $("#rec-time").textContent = "00:00";
-      recTick = setInterval(function () { $("#rec-time").textContent = fmtDur((Date.now() - recStart) / 1000); }, 500);
+      var maxS = (Number(S.maxRec) || 10) * 60, maxTxt = " / " + fmtDur(maxS), warned = false;
+      $("#v-cam").classList.add("rec"); $("#cam-rec").hidden = false; $("#rec-time").textContent = "00:00" + maxTxt;
+      recTick = setInterval(function () {
+        var s = (Date.now() - recStart) / 1000;
+        $("#rec-time").textContent = fmtDur(s) + maxTxt;
+        /* das Video liegt bis zum Speichern im Arbeitsspeicher → Länge begrenzen */
+        if (s >= maxS) { stopRec(); toast("Maximale Videolänge erreicht – Aufnahme gespeichert. Die Grenze lässt sich in den Einstellungen ändern.", 6000); }
+        else if (!warned && maxS - s <= 30) { warned = true; toast("Noch 30 Sekunden bis zur maximalen Videolänge."); }
+      }, 500);
+      spaceCheck(maxS);
     });
+  }
+  /* freier Speicher vs. erwartete Videogröße (ca. 6 Mbit/s ≈ 45 MB je Minute) */
+  function spaceCheck(maxS) {
+    if (!navigator.storage || !navigator.storage.estimate) return;
+    navigator.storage.estimate().then(function (e) {
+      if (!e || !e.quota) return;
+      var free = e.quota - (e.usage || 0), min = Math.floor(free / 45e6);
+      if (min < maxS / 60) toast(min < 1 ? "Der Speicher ist fast voll – das Video lässt sich womöglich nicht speichern. Bitte zuerst Aufnahmen sichern und löschen."
+        : "Wenig Speicher frei: reicht für etwa " + min + (min === 1 ? " Minute" : " Minuten") + " Video.", 6000);
+    }).catch(function () {});
   }
   function stopRec() { if (rec && rec.state !== "inactive") rec.stop(); }
   function shutter() {
@@ -586,6 +691,7 @@
     if (counting) return;
     if (rec) { stopRec(); return; }
     if (!hasLoc(loc)) { geoHide = false; if (geoState === "search") geoState = "unavail"; geoUi(); toast("Kein Standort – bitte GPS am Gerät einschalten. Die Aufnahme wird ohne Ort gespeichert.", 4500); }
+    else if (!loc.manual && loc.acc > 50) toast("GPS noch ungenau (± " + Math.round(loc.acc) + " m) – der Ort kann daneben liegen. Kurz warten oder den Ort später in der Aufnahme korrigieren.", 5000);
     countdown().then(function () { if (view !== "cam") return; if (S.mode === "video") startRec(); else takePhoto(); });
   }
   function lastThumb() {
@@ -661,6 +767,10 @@
           m.w = r.canvas.width; m.h = r.canvas.height; m.mime = "image/jpeg"; m.stamped = true;
           m.thumb = thumbOf(r.canvas, m.w, m.h); m.geoPending = !m.place;
           return addItem(m, r.blob);
+        }).then(function (res) {
+          if (!S.keepOrig) return res;
+          return plainJpeg(im, sz.w, sz.h, 4096).then(function (ob) { return putOrig(m.id, ob); })
+            .then(function () { m.orig = true; return putItem(m); }).catch(function () {}).then(function () { return res; });
         });
       });
     });
@@ -721,17 +831,148 @@
     var a = Math.round(it.lat / 0.02) * 0.02, b = Math.round(it.lng / 0.02) * 0.02;
     return { key: "g:" + a.toFixed(2) + "," + b.toFixed(2), label: "Bei " + de(Math.abs(a), 2) + "° " + (a >= 0 ? "N" : "S") + ", " + de(Math.abs(b), 2) + "° " + (b >= 0 ? "O" : "W") };
   }
+  /* Filter (Art, Zeitraum, Projekt) und Mehrfachauswahl */
+  var galF = { type: "", proj: "", range: "" }, galShown = [], selMode = false, sel = {};
+  function galFrom() {
+    var n = new Date(), day = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+    if (galF.range === "today") return day;
+    if (galF.range === "7") return day - 6 * 864e5;
+    if (galF.range === "30") return day - 29 * 864e5;
+    if (galF.range === "year") return new Date(n.getFullYear(), 0, 1).getTime();
+    return 0;
+  }
+  function galProjects() {
+    var s = $("#gal-proj"), seen = {}, names = [];
+    items.forEach(function (it) { if (it.project && !seen[it.project]) { seen[it.project] = 1; names.push(it.project); } });
+    names.sort(function (a, b) { return a.localeCompare(b, "de"); });
+    if (galF.proj && !seen[galF.proj]) galF.proj = "";
+    if (s.dataset.k !== names.join("\n")) {
+      s.dataset.k = names.join("\n"); s.textContent = "";
+      [""].concat(names).forEach(function (n) { var o = document.createElement("option"); o.value = n; o.textContent = n || "Alle Projekte"; s.appendChild(o); });
+    }
+    s.value = galF.proj; s.hidden = !names.length;
+  }
+  function selList() { return items.filter(function (it) { return sel[it.id]; }); }
+  function selUi() {
+    var n = selList().length;
+    $("#btn-sel").textContent = selMode ? "Fertig" : "Auswählen"; $("#btn-sel").hidden = !items.length && !selMode;
+    $("#sel-bar").hidden = !selMode; $("#v-gal").classList.toggle("selecting", selMode);
+    $("#sel-n").textContent = n + " ausgewählt";
+    $$("#sel-bar [data-need]").forEach(function (b) { b.disabled = !n; });
+    $("#sel-all").textContent = galShown.length && galShown.every(function (it) { return sel[it.id]; }) ? "Keine" : "Alle";
+  }
+  function selEnd() { selMode = false; sel = {}; renderGallery(); }
+  /* Dateien samt eindeutigen Namen laden (nacheinander, damit der Speicher nicht überläuft) */
+  function loadFiles(list, each) {
+    var used = {}, i = 0;
+    return (function next() {
+      if (i >= list.length) return Promise.resolve();
+      var it = list[i++];
+      return getBlob(it.id).then(function (b) {
+        if (!b) return null;
+        var name = fileName(it), k = 1, base = name.replace(/\.[^.]+$/, ""), ext = name.slice(base.length);
+        while (used[name]) name = base + "_" + (++k) + ext;
+        used[name] = 1;
+        return each({ name: name, blob: b, ts: it.ts, it: it }, i);
+      }).then(next);
+    })();
+  }
+  /* ZIP ohne Kompression (Fotos/Videos sind schon komprimiert) – kleiner eigener Schreiber, keine Fremdbibliothek */
+  var crcT = null;
+  function crc32(u8, c) {
+    if (!crcT) { crcT = new Uint32Array(256); for (var n = 0; n < 256; n++) { var v = n; for (var k = 0; k < 8; k++) v = v & 1 ? 0xEDB88320 ^ (v >>> 1) : v >>> 1; crcT[n] = v >>> 0; } }
+    c = ~c; for (var i = 0; i < u8.length; i++) c = crcT[(c ^ u8[i]) & 255] ^ (c >>> 8);
+    return ~c >>> 0;
+  }
+  function zipOf(list, label) {
+    var total = 0, parts = [], cen = [], off = 0, cnt = 0, enc = new TextEncoder();
+    var hdr = function (n) { var b = new ArrayBuffer(n); return { b: b, v: new DataView(b) }; };
+    return loadFiles(list, function (f, i) {
+      busy(label + " " + i + " von " + list.length + " …");
+      total += f.blob.size;
+      if (total > 3.9e9 || cnt >= 65000) throw new Error("zip-size");
+      return f.blob.arrayBuffer().then(function (buf) {
+        var crc = crc32(new Uint8Array(buf), 0), nm = enc.encode(f.name), d = new Date(f.ts);
+        var time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+        var date = ((Math.max(1980, d.getFullYear()) - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+        var l = hdr(30); l.v.setUint32(0, 0x04034b50, true); l.v.setUint16(4, 20, true); l.v.setUint16(6, 0x0800, true);
+        l.v.setUint16(10, time, true); l.v.setUint16(12, date, true); l.v.setUint32(14, crc, true);
+        l.v.setUint32(18, buf.byteLength, true); l.v.setUint32(22, buf.byteLength, true); l.v.setUint16(26, nm.length, true);
+        var c = hdr(46); c.v.setUint32(0, 0x02014b50, true); c.v.setUint16(4, 20, true); c.v.setUint16(6, 20, true); c.v.setUint16(8, 0x0800, true);
+        c.v.setUint16(12, time, true); c.v.setUint16(14, date, true); c.v.setUint32(16, crc, true);
+        c.v.setUint32(20, buf.byteLength, true); c.v.setUint32(24, buf.byteLength, true); c.v.setUint16(28, nm.length, true);
+        c.v.setUint32(42, off, true);
+        parts.push(l.b, nm, f.blob); cen.push(c.b, nm);   /* der Blob selbst bleibt auf der Platte, nur CRC wurde gelesen */
+        off += 30 + nm.length + buf.byteLength; cnt++;
+      });
+    }).then(function () {
+      if (!cnt) throw new Error("zip-empty");
+      var size = cen.reduce(function (s, p) { return s + p.byteLength; }, 0), e = hdr(22);
+      e.v.setUint32(0, 0x06054b50, true); e.v.setUint16(8, cnt, true); e.v.setUint16(10, cnt, true);
+      e.v.setUint32(12, size, true); e.v.setUint32(16, off, true);
+      return new Blob(parts.concat(cen, [e.b]), { type: "application/zip" });
+    });
+  }
+  function zipName() { var d = new Date(); return "GeoCam_Export_" + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + "_" + p2(d.getHours()) + p2(d.getMinutes()) + ".zip"; }
+  function exportZip(list) {
+    if (!list.length) { toast("Es gibt noch keine Aufnahmen."); return Promise.resolve(); }
+    busy("Sicherung wird erstellt …");
+    return zipOf(list, "Sichere").then(function (z) {
+      download(z, zipName());
+      toast(list.length + (list.length === 1 ? " Aufnahme" : " Aufnahmen") + " als ZIP gesichert (" + de(z.size / 1048576, 1) + " MB).", 5000);
+    }).catch(function (e) {
+      console.warn("zip", e);
+      toast(e && e.message === "zip-size" ? "Zu groß für eine einzelne ZIP-Datei (über 3,9 GB) – bitte in der Galerie in Teilen auswählen und sichern."
+        : "Die Sicherung konnte nicht erstellt werden – womöglich reicht der Arbeitsspeicher nicht. Bitte weniger Aufnahmen auswählen.", 7000);
+    }).then(unbusy);
+  }
+  function selDownload() {
+    var l = selList(); if (!l.length) return;
+    if (l.length > 1) { exportZip(l).then(selEnd); return; }
+    getBlob(l[0].id).then(function (b) { if (b) download(b, fileName(l[0])); selEnd(); }).catch(saveErr);
+  }
+  function selShare() {
+    var l = selList(), files = []; if (!l.length) return;
+    if (!navigator.canShare || !window.File) { toast("Teilen mehrerer Dateien wird hier nicht unterstützt – bitte „Herunterladen“ nutzen.", 4500); return; }
+    busy("Wird vorbereitet …");
+    loadFiles(l, function (f) { files.push(new File([f.blob], f.name, { type: f.it.mime })); }).then(function () {
+      unbusy();
+      if (!files.length || !navigator.canShare({ files: files })) { toast("Diese Auswahl lässt sich hier nicht teilen – bitte „Herunterladen“ nutzen.", 4500); return; }
+      return navigator.share({ files: files, title: "GeoCam" }).then(selEnd, function (e) {
+        /* nach dem Laden kann die Nutzergeste verfallen sein */
+        if (e && e.name === "NotAllowedError") toast("Teilen wurde vom Browser blockiert – bitte weniger Aufnahmen wählen oder „Herunterladen“ nutzen.", 5000);
+      });
+    }).catch(function (e) { unbusy(); saveErr(e); });
+  }
+  function selDelete() {
+    var l = selList(); if (!l.length) return;
+    if (!confirm(l.length + (l.length === 1 ? " Aufnahme" : " Aufnahmen") + " endgültig löschen?")) return;
+    var park = l.some(function (it) { return it.id === parkId; });
+    Promise.all(l.map(function (it) { return delItem(it.id); })).then(function () {
+      items = items.filter(function (it) { return !sel[it.id]; });
+      return park ? setPark(null) : null;
+    }).then(function () {
+      selMode = false; sel = {}; render(); lastThumb();
+      toast(l.length + (l.length === 1 ? " Aufnahme gelöscht." : " Aufnahmen gelöscht."));
+    }).catch(saveErr);
+  }
   function renderGallery() {
     var list = $("#gal-list"), q = $("#gal-search").value.trim().toLowerCase();
     list.textContent = "";
+    galProjects();
+    var from = galFrom(), filt = !!(q || galF.type || galF.proj || galF.range);
     var shown = items.filter(function (it) {
+      if (galF.type && it.type !== galF.type) return false;
+      if (galF.proj && (it.project || "") !== galF.proj) return false;
+      if (from && it.ts < from) return false;
       if (!q) return true;
       return [it.place, it.city, it.suburb, it.address, it.note, it.project].join(" ").toLowerCase().indexOf(q) >= 0;
     });
+    galShown = shown; selUi();
     var empty = $("#gal-empty"); empty.hidden = shown.length > 0;
     if (!shown.length) {
       $("b", empty).textContent = items.length ? "Keine Treffer" : "Noch keine Aufnahmen";
-      $("span", empty).textContent = items.length ? "Für diese Suche wurde nichts gefunden." : "Fotos und Videos erscheinen hier – automatisch nach Ort sortiert.";
+      $("span", empty).textContent = items.length ? (filt && !q ? "Für diesen Filter wurde nichts gefunden." : "Für diese Suche wurde nichts gefunden.") : "Fotos und Videos erscheinen hier – automatisch nach Ort sortiert.";
       return;
     }
     var groups = [], idx = {};
@@ -762,7 +1003,17 @@
         var im = document.createElement("img"); im.loading = "lazy"; im.alt = it.place || "Aufnahme"; im.src = it.thumb; t.appendChild(im);
         if (it.type === "video") { var v = document.createElement("span"); v.className = "vid"; v.textContent = "▶ " + fmtDur(it.dur); t.appendChild(v); }
         if (it.id === parkId) { var pk = document.createElement("span"); pk.className = "pk"; pk.textContent = "P"; t.appendChild(pk); }
-        t.addEventListener("click", function () { openDetail(it.id); });
+        if (sel[it.id]) t.classList.add("sel");
+        t.addEventListener("click", function () {
+          if (!selMode) { openDetail(it.id); return; }
+          if (sel[it.id]) delete sel[it.id]; else sel[it.id] = true;
+          t.classList.toggle("sel", !!sel[it.id]); selUi();
+        });
+        /* langer Druck startet die Auswahl */
+        t.addEventListener("contextmenu", function (e) {
+          e.preventDefault(); if (selMode) return;
+          selMode = true; sel = {}; sel[it.id] = true; renderGallery();
+        });
         grid.appendChild(t);
       });
       sec.appendChild(grid); list.appendChild(sec);
@@ -794,7 +1045,7 @@
     var strip = $("#map-strip"); strip.textContent = ""; strip.hidden = !list.length;
     if (mapList && list.length < all.length) {
       var ab = document.createElement("button"); ab.type = "button"; ab.className = "map-all"; ab.textContent = "Alle Orte";
-      ab.addEventListener("click", function () { mapList = null; renderMap(); }); strip.appendChild(ab);
+      ab.addEventListener("click", function () { mapList = null; ovFit = true; renderMap(); }); strip.appendChild(ab);
     }
     var selEl = null;
     list.forEach(function (it) {
@@ -802,7 +1053,7 @@
       var im = document.createElement("img"); im.loading = "lazy"; im.alt = it.place || "Aufnahme"; im.src = it.thumb; t.appendChild(im);
       if (it.type === "video") { var v = document.createElement("span"); v.className = "vid"; v.textContent = "▶"; t.appendChild(v); }
       if (it.id === parkId) { var pk = document.createElement("span"); pk.className = "pk"; pk.textContent = "P"; t.appendChild(pk); }
-      t.addEventListener("click", function () { if (it === mapSel) openDetail(it.id); else { mapSel = it; renderMap(); } });
+      t.addEventListener("click", function () { if (it === mapSel) openDetail(it.id); else { mapSel = it; ovPan = true; renderMap(); } });
       if (it === mapSel) selEl = t;
       strip.appendChild(t);
     });
@@ -813,10 +1064,42 @@
       $("#map-sub").textContent = [mapSel.place ? mapSel.address : "", fmtDate(new Date(mapSel.ts))].filter(Boolean).join(" · ");
       $("#map-ext").href = mapsShow(mapSel);
     }
+    var ov = S.mapMode !== "g" && !!window.L;
+    $$("#map-mode button").forEach(function (b) { b.classList.toggle("on", (b.dataset.mode === "g") !== ov); });
+    $("#map-ov").hidden = !ov; $("#map").hidden = ov;
+    if (ov) { ovShow(list); return; }
     if (navigator.onLine === false) gmapShow("");
     else if (mapSel) gmapShow(gmapUrl(mapSel.lat, mapSel.lng, 17));
     else if (hasLoc(loc)) gmapShow(gmapUrl(loc.lat, loc.lng, 14));
     else gmapShow("https://www.google.com/maps?q=Deutschland&z=6&hl=de&output=embed");
+  }
+  /* Übersicht: alle Aufnahmen als Pins auf einer OpenStreetMap-Karte (Leaflet) */
+  var ovMap = null, ovLayer = null, ovFit = true, ovPan = false;
+  function ovShow(list) {
+    if (!ovMap) {
+      ovMap = L.map("map-ov", { maxZoom: 19 });
+      L.tileLayer(OSM_TILES, { maxZoom: 19, attribution: OSM_ATTR }).addTo(ovMap);
+      ovLayer = L.layerGroup().addTo(ovMap); ovFit = true;
+    }
+    ovMap.invalidateSize(); ovLayer.clearLayers();
+    var pts = [];
+    if (hasLoc(loc)) L.marker([loc.lat, loc.lng], { interactive: false, keyboard: false, zIndexOffset: -500,
+      icon: L.divIcon({ className: "", html: '<div class="gc-me"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(ovLayer);
+    list.forEach(function (it) {
+      var park = it.id === parkId, on = it === mapSel;
+      pts.push([it.lat, it.lng]);
+      L.marker([it.lat, it.lng], { zIndexOffset: on ? 1000 : park ? 500 : 0, title: it.place || "Aufnahme",
+        icon: park ? L.divIcon({ className: "", html: '<div class="gc-park' + (on ? " sel" : "") + '">P</div>', iconSize: [34, 34], iconAnchor: [17, 46] })
+          : L.divIcon({ className: "", html: '<div class="gc-pin' + (on ? " sel" : "") + '"></div>', iconSize: [22, 22], iconAnchor: [11, 22] }) })
+        .on("click", function () { if (it === mapSel) return; mapSel = it; renderMap(); }).addTo(ovLayer);
+    });
+    if (ovFit) {
+      if (pts.length > 1) ovMap.fitBounds(pts, { padding: [40, 40], maxZoom: 17 });
+      else if (pts.length) ovMap.setView(pts[0], 16);
+      else if (hasLoc(loc)) ovMap.setView([loc.lat, loc.lng], 14);
+      else ovMap.setView([51.2, 10.4], 6);
+    } else if (ovPan && mapSel) ovMap.panTo([mapSel.lat, mapSel.lng]);
+    ovFit = ovPan = false;
   }
 
   /* ================= Sheets (Android-Zurück schließt) ================= */
@@ -918,7 +1201,10 @@
       return renderStamped(a[0], sz.w, sz.h, d, 4096);
     }).then(function (r) {
       it.w = r.canvas.width; it.h = r.canvas.height; it.mime = "image/jpeg"; it.stamped = true; it.thumb = thumbOf(r.canvas, it.w, it.h);
-      return putItem(it, r.blob).then(function () { cur.blob = r.blob; showMedia(); fillDetail(); lastThumb(); toast("Stempel eingebrannt."); });
+      var ob = S.keepOrig ? cur.blob : null;   /* die bisherige Datei ist das ungestempelte Original */
+      return putItem(it, r.blob).then(function () {
+        return ob ? putOrig(it.id, ob).then(function () { it.orig = true; return putItem(it); }).catch(function () {}) : null;
+      }).then(function () { cur.blob = r.blob; showMedia(); fillDetail(); lastThumb(); toast("Stempel eingebrannt."); });
     }).catch(function (e) { console.error(e); toast("Das Bild konnte nicht gestempelt werden."); }).then(unbusy);
   }
   function setItemLoc(it, lat, lng) {
@@ -931,14 +1217,17 @@
     var blobP = wasStamped && it.mime === "image/jpeg" && S.exif ? getBlob(it.id).then(function (b) { return b.arrayBuffer(); })
       .then(function (buf) { return new Blob([GCExif.insertGps(buf, { lat: lat, lng: lng, date: new Date(it.ts) })], { type: "image/jpeg" }); })
       .catch(function () { return null; }) : Promise.resolve(null);
-    return Promise.all([geoP, blobP]).then(function (a) {
-      return putItem(it, a[1]).then(function () {
-        if (cur && cur.it === it && a[1]) cur.blob = a[1];
-        refreshOpen();
-        toast(wasStamped ? "Ort geändert. Der eingebrannte Stempel im Bild bleibt unverändert." : "Ort gespeichert.", 4500);
+    /* liegt das ungestempelte Original vor, wird der Stempel mit dem neuen Ort neu gesetzt */
+    var newP = wasStamped && it.orig ? geoP.then(function () { busy("Stempel wird aktualisiert …"); return restamp(it); }) : Promise.resolve(null);
+    return Promise.all([geoP, blobP, newP]).then(function (a) {
+      var nb = a[2] || a[1];
+      return putItem(it, nb).then(function () {
+        if (cur && cur.it === it && nb) { cur.blob = nb; if (a[2]) showMedia(); }
+        refreshOpen(); lastThumb();
+        toast(a[2] ? "Ort geändert – der Stempel im Bild wurde aktualisiert." : wasStamped ? "Ort geändert. Der eingebrannte Stempel im Bild bleibt unverändert." : "Ort gespeichert.", 4500);
         backfill();
       });
-    }).catch(saveErr);
+    }).catch(saveErr).then(unbusy);
   }
 
   /* ================= Ortswahl ================= */
@@ -987,6 +1276,7 @@
     $("#a-pos").textContent = geo ? "Position auf der Karte ändern" : "Position auf der Karte setzen";
     $("#a-auto").hidden = !geo;
     $("#a-stamp").hidden = !(adT !== "live" && o.stamped);
+    $("#a-stamp").textContent = o.orig ? "Der Stempel im Bild wird mit der neuen Adresse neu gesetzt." : "Der bereits ins Bild eingebrannte Stempel bleibt unverändert.";
   }
   function openAddr(t) {
     if (!t) return;
@@ -1015,10 +1305,14 @@
       refreshOpen(); toast("Adresse geändert – sie gilt für die nächsten Aufnahmen an diesem Ort.", 4500);
     } else {
       o.geoPending = false; o.addrManual = !auto;
-      putItem(o).then(function () {
-        refreshOpen(); if (!cur && $("#park").hidden) render();
-        toast(o.stamped ? "Adresse geändert. Der eingebrannte Stempel im Bild bleibt unverändert." : "Adresse geändert.", 4500);
-      }).catch(saveErr);
+      if (o.stamped && o.orig) busy("Stempel wird aktualisiert …");
+      (o.stamped ? restamp(o) : Promise.resolve(null)).then(function (nb) {
+        return putItem(o, nb).then(function () {
+          if (nb && cur && cur.it === o) { cur.blob = nb; showMedia(); }
+          refreshOpen(); lastThumb(); if (!cur && $("#park").hidden) render();
+          toast(nb ? "Adresse geändert – der Stempel im Bild wurde aktualisiert." : o.stamped ? "Adresse geändert. Der eingebrannte Stempel im Bild bleibt unverändert." : "Adresse geändert.", 4500);
+        });
+      }).catch(saveErr).then(unbusy);
     }
   }
   /* offene Ansichten nach einer Orts-/Adressänderung neu füllen */
@@ -1045,7 +1339,7 @@
     var c = $("#set-preview"), g = c.getContext("2d"), W = c.width, H = c.height;
     var sky = g.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, "#5b9bd5"); sky.addColorStop(0.62, "#cfe3f3"); sky.addColorStop(0.62, "#6b8f5a"); sky.addColorStop(1, "#3f5d3a");
     g.fillStyle = sky; g.fillRect(0, 0, W, H);
-    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg?v=5"; }
+    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg?v=6"; }
     if (_bg.complete && _bg.naturalWidth) {   /* Illustration der Freisinger Altstadt, formatfüllend */
       var k = Math.max(W / _bg.naturalWidth, H / _bg.naturalHeight), bw = _bg.naturalWidth * k, bh = _bg.naturalHeight * k;
       g.drawImage(_bg, (W - bw) / 2, (H - bh) / 2, bw, bh);
@@ -1123,9 +1417,51 @@
   function parkItem() { return parkId ? items.filter(function (x) { return x.id === parkId; })[0] || null : null; }
   function parkUi() { $("#btn-park").classList.toggle("on", !!parkItem()); }
   function setPark(id) {
+    if ((id || null) !== parkId && parkUntil) setMeter(0);   /* neue Parkuhr je Parkplatz */
     parkId = id || null; parkUi();
     return tx(["kv"], "readwrite", function (t) { if (parkId) t.objectStore("kv").put(parkId, "park"); else t.objectStore("kv").delete("park"); })
       .catch(function (e) { console.error(e); });
+  }
+  /* Parkuhr: Ablaufzeit + Erinnerung. Ohne Server gibt es keinen Weckdienst – die Erinnerung kommt nur,
+     solange die App geöffnet (oder im Hintergrund noch aktiv) ist. */
+  var parkUntil = 0, parkWarnT = 0, parkEndT = 0, parkTold = false;
+  function hm(ms) { var d = new Date(ms); return p2(d.getHours()) + ":" + p2(d.getMinutes()); }
+  function parkNotify(msg) {
+    toast(msg, 9000);
+    try { if (navigator.vibrate) navigator.vibrate([300, 150, 300]); } catch (e) {}
+    if (!("Notification" in window) || Notification.permission !== "granted" || !navigator.serviceWorker) return;
+    navigator.serviceWorker.ready.then(function (r) {
+      return r.showNotification("GeoCam – Parkuhr", { body: msg, tag: "gc-park", icon: "./icon-192.png", data: "./app.html?go=park" });
+    }).catch(function () {});
+  }
+  function parkTimers() {
+    clearTimeout(parkWarnT); clearTimeout(parkEndT); parkWarnT = parkEndT = 0;
+    if (!parkUntil) return;
+    var left = parkUntil - Date.now();
+    if (left <= 0) { if (!parkTold) { parkTold = true; parkNotify("Die Parkzeit ist seit " + hm(parkUntil) + " Uhr abgelaufen."); } return; }
+    if (left > 6e5) parkWarnT = setTimeout(function () { parkNotify("Die Parkzeit läuft in 10 Minuten ab (" + hm(parkUntil) + " Uhr)."); parkLive(); }, left - 6e5);
+    parkEndT = setTimeout(function () { parkTold = true; parkNotify("Die Parkzeit ist abgelaufen."); parkLive(); }, left);
+  }
+  function setMeter(until) {
+    parkUntil = until || 0; parkTold = false; parkTimers(); parkLive();
+    return tx(["kv"], "readwrite", function (t) { if (parkUntil) t.objectStore("kv").put(parkUntil, "parkUntil"); else t.objectStore("kv").delete("parkUntil"); })
+      .catch(function (e) { console.error(e); });
+  }
+  function meterStart(until) {
+    setMeter(until);
+    var note = "";
+    if (!("Notification" in window)) note = " Erinnerung nur als Hinweis in der geöffneten App.";
+    else if (Notification.permission === "default") { try { var p = Notification.requestPermission(); if (p && p.catch) p.catch(function () {}); } catch (e) {} }
+    else if (Notification.permission === "denied") note = " Mitteilungen sind blockiert – Erinnerung nur in der geöffneten App.";
+    toast("Parkuhr gestellt: läuft ab um " + hm(until) + " Uhr." + note, 5000);
+  }
+  function meterTxt() {
+    var el = $("#pk-meter-info"), left = parkUntil - Date.now();
+    $("#pk-meter-x").hidden = !parkUntil; el.classList.toggle("warn", !!parkUntil && left < 6e5);
+    if (!parkUntil) { el.textContent = "Keine Ablaufzeit gestellt."; return; }
+    if (left <= 0) { el.textContent = "Parkzeit abgelaufen (seit " + hm(parkUntil) + " Uhr)."; return; }
+    var m = Math.ceil(left / 60000);
+    el.textContent = "Läuft ab um " + hm(parkUntil) + " Uhr – noch " + (m >= 60 ? Math.floor(m / 60) + " Std. " + (m % 60) + " Min." : m + " Min.");
   }
   function armPark(on) { parkArmed = !!on; $("#park-arm").hidden = !parkArmed; }
   function bearing(a, b) {
@@ -1152,6 +1488,7 @@
       el.textContent = m < 15 ? "Du stehst am Parkplatz" : "ca. " + fmtDist(m) + " entfernt · Richtung " + compassTxt(bearing(loc, it)).split(" ")[0];
     }
     $("#pk-since").textContent = "Geparkt " + fmtAgo(Date.now() - it.ts) + " · " + fmtDate(new Date(it.ts));
+    meterTxt();
   }
   function fillPark() {
     var it = parkItem();
@@ -1177,7 +1514,7 @@
     row("Koordinaten", geo ? fmtCoords(it.lat, it.lng) : "");
     row("Genauigkeit", typeof it.acc === "number" ? "± " + Math.round(it.acc) + " m" : "");
     dl.hidden = !dl.firstChild;
-    $("#pk-note").value = it.note || "";
+    $("#pk-note").value = it.note || ""; $("#pk-time").value = "";
     parkLive();
   }
   function openPark() {
@@ -1270,11 +1607,12 @@
     ["cam", "gal", "map", "set"].forEach(function (n) { $("#v-" + n).hidden = n !== v; });
     $$("#tabs button").forEach(function (b) { b.classList.toggle("on", b.dataset.view === v); });
     if (v === "cam") startCamera(); else stopCamera();
+    if (v !== "gal" && selMode) { selMode = false; sel = {}; selUi(); }
     if (v === "gal") renderGallery();
     if (v === "map") {
       mapList = focus && focus.length ? focus : null;
       if (mapList) mapSel = mapList[0];
-      renderMap();
+      ovFit = true; renderMap();
     }
     if (v === "set") { drawPreview(); storageInfo(); }
   }
@@ -1321,6 +1659,34 @@
       tx(["kv"], "readwrite", function (t) { t.objectStore("kv").delete("logo"); }).then(function () { return setLogo(null); }).then(drawPreview);
     });
     $("#gal-search").addEventListener("input", renderGallery);
+    [["#gal-type", "type"], ["#gal-range", "range"], ["#gal-proj", "proj"]].forEach(function (a) {
+      $(a[0]).addEventListener("change", function () { galF[a[1]] = $(a[0]).value; renderGallery(); });
+    });
+    /* Mehrfachauswahl */
+    $("#btn-sel").addEventListener("click", function () { if (selMode) selEnd(); else { selMode = true; sel = {}; renderGallery(); } });
+    $("#sel-all").addEventListener("click", function () {
+      var all = galShown.length && galShown.every(function (it) { return sel[it.id]; });
+      galShown.forEach(function (it) { if (all) delete sel[it.id]; else sel[it.id] = true; });
+      renderGallery();
+    });
+    $("#sel-share").addEventListener("click", selShare);
+    $("#sel-dl").addEventListener("click", selDownload);
+    $("#sel-del").addEventListener("click", selDelete);
+    $("#btn-zip-all").addEventListener("click", function () { exportZip(items.slice()); });
+    /* Zoom: Knopf springt durch die Stufen, zwei Finger zoomen stufenlos */
+    $("#btn-zoom").addEventListener("click", zoomStep);
+    var cv = $("#cam-canvas");
+    cv.addEventListener("touchstart", function (e) { if (e.touches.length === 2 && zoomCaps) pinch = { d: touchDist(e), z: zoomV }; }, { passive: true });
+    cv.addEventListener("touchmove", function (e) {
+      if (!pinch || e.touches.length !== 2) return;
+      e.preventDefault(); if (pinch.d > 0) setZoom(pinch.z * touchDist(e) / pinch.d);
+    }, { passive: false });
+    cv.addEventListener("touchend", function (e) { if (e.touches.length < 2) pinch = null; });
+    cv.addEventListener("touchcancel", function () { pinch = null; });
+    /* Karte: Übersicht (alle Pins) oder Google Maps */
+    $$("#map-mode button").forEach(function (b) {
+      b.addEventListener("click", function () { S.mapMode = b.dataset.mode; saveS(); ovFit = true; renderMap(); });
+    });
     $$("#gal-sort button").forEach(function (b) {
       b.classList.toggle("on", b.dataset.sort === S.sort);
       b.addEventListener("click", function () {
@@ -1331,7 +1697,7 @@
     $("#btn-wipe").addEventListener("click", function () {
       if (!items.length || !confirm("Wirklich alle " + items.length + " Aufnahmen endgültig löschen?")) return;
       tx(["media", "blobs"], "readwrite", function (t) { t.objectStore("media").clear(); t.objectStore("blobs").clear(); })
-        .then(function () { items = []; mapSel = null; mapList = null; setPark(null); render(); toast("Alle Aufnahmen gelöscht."); }).catch(saveErr);
+        .then(function () { items = []; mapSel = null; mapList = null; selMode = false; sel = {}; setPark(null); render(); toast("Alle Aufnahmen gelöscht."); }).catch(saveErr);
     });
     /* Detail */
     $("#d-close").addEventListener("click", closeSheet);
@@ -1367,6 +1733,16 @@
     $("#pk-addr").addEventListener("click", function () { openAddr(parkItem()); });
     $("#pk-open").addEventListener("click", function () { if (parkItem()) openDetail(parkId); });
     $("#pk-note").addEventListener("change", function () { var it = parkItem(); if (!it) return; it.note = $("#pk-note").value.trim(); putItem(it).catch(saveErr); });
+    $$("#pk-meter [data-min]").forEach(function (b) {
+      b.addEventListener("click", function () { meterStart(Date.now() + Number(b.dataset.min) * 60000); });
+    });
+    $("#pk-time").addEventListener("change", function () {
+      var m = /^(\d\d):(\d\d)/.exec($("#pk-time").value); if (!m) return;
+      var d = new Date(); d.setHours(Number(m[1]), Number(m[2]), 0, 0);
+      if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);   /* Uhrzeit schon vorbei → morgen */
+      meterStart(d.getTime());
+    });
+    $("#pk-meter-x").addEventListener("click", function () { setMeter(0); toast("Parkuhr gelöscht."); });
     $("#pk-end").addEventListener("click", function () {
       if (!confirm("Parkplatz beenden? Das Foto bleibt in der Galerie.")) return;
       setPark(null).then(function () { fillPark(); toast("Parkplatz beendet."); });
@@ -1408,7 +1784,9 @@
       }).catch(function () { $("#p-info").textContent = "Die Suche ist gerade nicht erreichbar."; });
     });
     document.addEventListener("visibilitychange", function () {
-      if (document.hidden) { if (!rec) stopCamera(); } else if (view === "cam") startCamera();
+      if (document.hidden) { if (!rec) stopCamera(); return; }
+      if (view === "cam") startCamera();
+      parkTimers(); parkLive();   /* Zeitgeber können im Hintergrund eingeschlafen sein */
     });
     window.addEventListener("online", function () { refreshLocInfo(); backfill(); if (view === "map") renderMap(); });
     window.addEventListener("offline", function () { if (view === "map") renderMap(); });
@@ -1423,19 +1801,21 @@
       if (go) { u.searchParams.delete("go"); history.replaceState(null, "", u.pathname + u.search + u.hash); }
     } catch (e) {}
     var loadAll = tx(["media", "kv"], "readonly", function (t) {
-      var out = {}, a = t.objectStore("media").getAll(), b = t.objectStore("kv").get("logo"), c = t.objectStore("kv").get("park");
+      var out = {}, a = t.objectStore("media").getAll(), b = t.objectStore("kv").get("logo"), c = t.objectStore("kv").get("park"),
+        d = t.objectStore("kv").get("parkUntil");
       a.onsuccess = function () { out.items = a.result || []; }; b.onsuccess = function () { out.logo = b.result || null; };
-      c.onsuccess = function () { out.park = c.result || null; };
+      c.onsuccess = function () { out.park = c.result || null; }; d.onsuccess = function () { out.until = d.result || 0; };
       return out;
     }).then(function (o) {
       items = (o.items || []).sort(function (a, b) { return b.ts - a.ts; });
-      parkId = o.park || null;
+      parkId = o.park || null; parkUntil = parkId ? Number(o.until) || 0 : 0;
       return o.logo ? setLogo(o.logo) : null;
     }).catch(function (e) { console.error(e); toast("Der Gerätespeicher ist nicht verfügbar (privater Modus?). Aufnahmen können nicht gespeichert werden.", 7000); });
     loadAll.then(function () {
       show(go === "gal" || go === "map" || go === "set" ? go : "cam");
       lastThumb(); parkUi(); startGps(); startCompass(false); backfill();
       if (go === "park") openPark();
+      parkTimers();
     });
   }
   init();

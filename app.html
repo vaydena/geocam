@@ -30,7 +30,7 @@ if ("serviceWorker" in navigator) {
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="GeoCam">
 <link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
-<link rel="stylesheet" href="./app.css?v=5">
+<link rel="stylesheet" href="./app.css?v=6">
 </head>
 <body>
 
@@ -70,6 +70,9 @@ if ("serviceWorker" in navigator) {
         </button>
         <button id="btn-torch" class="tool" type="button" aria-label="Licht" hidden>
           <svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+        </button>
+        <button id="btn-zoom" class="tool" type="button" aria-label="Zoom" hidden>
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M8 11h6M11 8v6"/></svg><b id="zoom-lbl"></b>
         </button>
         <button id="btn-pin" class="tool" type="button" aria-label="Standort manuell wählen">
           <svg viewBox="0 0 24 24"><path d="M12 22s7-6.2 7-12a7 7 0 1 0-14 0c0 5.800 7 12 7 12z"/><circle cx="12" cy="10" r="2.500"/></svg>
@@ -120,6 +123,7 @@ if ("serviceWorker" in navigator) {
   <section id="v-gal" class="view page" hidden>
     <header class="bar">
       <h1>Galerie</h1>
+      <button id="btn-sel" class="btn sm" type="button" hidden>Auswählen</button>
       <button id="btn-import2" class="btn sm" type="button">Importieren</button>
     </header>
     <div class="gal-ctl">
@@ -128,8 +132,20 @@ if ("serviceWorker" in navigator) {
         <button type="button" data-sort="place" class="on">Nach Ort</button>
         <button type="button" data-sort="date">Nach Datum</button>
       </div>
+      <div class="gal-filt">
+        <select id="gal-type" aria-label="Art"><option value="">Fotos + Videos</option><option value="photo">Nur Fotos</option><option value="video">Nur Videos</option></select>
+        <select id="gal-range" aria-label="Zeitraum"><option value="">Jederzeit</option><option value="today">Heute</option><option value="7">7 Tage</option><option value="30">30 Tage</option><option value="year">Dieses Jahr</option></select>
+        <select id="gal-proj" aria-label="Projekt" hidden></select>
+      </div>
     </div>
     <div id="gal-list"></div>
+    <div id="sel-bar" class="sel-bar" hidden>
+      <span id="sel-n">0 ausgewählt</span>
+      <button id="sel-all" class="btn sm" type="button">Alle</button>
+      <button id="sel-share" class="btn sm" type="button" data-need>Teilen</button>
+      <button id="sel-dl" class="btn sm" type="button" data-need>Sichern</button>
+      <button id="sel-del" class="btn sm danger" type="button" data-need>Löschen</button>
+    </div>
     <div id="gal-empty" class="empty" hidden>
       <b>Noch keine Aufnahmen</b>
       <span>Fotos und Videos erscheinen hier – automatisch nach Ort sortiert.</span>
@@ -138,6 +154,11 @@ if ("serviceWorker" in navigator) {
 
   <!-- ===== Karte ===== -->
   <section id="v-map" class="view mapview" hidden>
+    <div class="seg" id="map-mode">
+      <button type="button" data-mode="ov" class="on">Übersicht</button>
+      <button type="button" data-mode="g">Google Maps</button>
+    </div>
+    <div id="map-ov" hidden></div>
     <div id="map"></div>
     <div id="map-empty" class="map-empty" hidden>Noch keine Aufnahmen mit Standort.</div>
     <div id="map-bar" class="map-bar" hidden>
@@ -210,8 +231,13 @@ if ("serviceWorker" in navigator) {
       <label class="row"><span>GPS in die Bilddatei schreiben (EXIF)</span><input type="checkbox" data-s="exif"></label>
       <label class="row"><span>Ton bei Videos aufnehmen</span><input type="checkbox" data-s="audio"></label>
       <label class="row"><span>Importierte Fotos stempeln</span><input type="checkbox" data-s="stampImport"></label>
+      <label class="row"><span>Fotos in voller Kameraauflösung</span><input type="checkbox" data-s="hiRes"></label>
+      <label class="row"><span>Original ohne Stempel aufbewahren</span><input type="checkbox" data-s="keepOrig"></label>
+      <label class="row"><span>Maximale Videolänge</span>
+        <select data-s="maxRec" data-num><option value="5">5 Minuten</option><option value="10">10 Minuten</option><option value="20">20 Minuten</option><option value="30">30 Minuten</option></select></label>
       <label class="row"><span>Foto-Qualität</span>
         <select data-s="quality" data-num><option value="0.8">Normal</option><option value="0.92">Hoch</option><option value="0.97">Sehr hoch</option></select></label>
+      <p class="hint">Mit aufbewahrtem Original lässt sich der Stempel später neu setzen, wenn du Ort oder Adresse änderst – das braucht je Foto etwa doppelt so viel Speicher. Volle Auflösung und Zoom hängen von Kamera und Browser ab.</p>
     </div>
 
     <div class="card">
@@ -223,16 +249,18 @@ if ("serviceWorker" in navigator) {
     <div class="card">
       <h2>Online-Dienste</h2>
       <label class="row"><span>Adresse und Ort online ermitteln</span><input type="checkbox" data-s="geocodeOnline"></label>
-      <p class="hint">Für Adresse, Mini-Karte und Ortswahl wird der Standort an OpenStreetMap übermittelt, für das Wetter an Open-Meteo. Die Karte mit deinen Aufnahmen kommt von Google Maps – dabei wird der gezeigte Ort an Google übermittelt. Fotos und Videos verlassen das Gerät nicht. Ohne Internet werden Aufnahmen mit Koordinaten gespeichert und der Ort später ergänzt.</p>
+      <p class="hint">Für Adresse, Mini-Karte und Ortswahl wird der Standort an OpenStreetMap übermittelt, für das Wetter an Open-Meteo. Die Übersichtskarte lädt ihre Kartenbilder von OpenStreetMap. In der Ansicht „Google Maps“ wird der gezeigte Ort an Google übermittelt. Fotos und Videos verlassen das Gerät nicht. Ohne Internet werden Aufnahmen mit Koordinaten gespeichert und der Ort später ergänzt.</p>
     </div>
 
     <div class="card">
       <h2>Speicher</h2>
       <p class="hint" id="storage-info">–</p>
+      <button id="btn-zip-all" class="btn" type="button">Alle Aufnahmen als ZIP sichern</button>
+      <p class="hint">Die Aufnahmen liegen nur auf diesem Gerät. Die ZIP-Datei ist deine Sicherung – z. B. vor einem Handywechsel oder bevor du Browserdaten löschst.</p>
       <button id="btn-wipe" class="btn danger" type="button">Alle Aufnahmen löschen</button>
     </div>
 
-    <p class="foot">GeoCam · Version 1.2 · Karte: Google Maps · Adressen und Mini-Karte © OpenStreetMap-Mitwirkende</p>
+    <p class="foot">GeoCam · Version 1.3 · Karte: OpenStreetMap + Google Maps · Adressen und Mini-Karte © OpenStreetMap-Mitwirkende</p>
   </section>
 </main>
 
@@ -319,6 +347,18 @@ if ("serviceWorker" in navigator) {
       <dl id="pk-info" class="d-info"></dl>
       <label class="col"><span>Notiz (Parkdeck, Ebene, Stellplatz)</span>
         <input id="pk-note" type="text" maxlength="120" placeholder="z. B. Ebene 2, Platz 147" autocomplete="off"></label>
+      <div id="pk-meter" class="pk-meter">
+        <b>Parkuhr</b>
+        <span id="pk-meter-info">Keine Ablaufzeit gestellt.</span>
+        <div class="pk-meter-b">
+          <button class="btn sm" type="button" data-min="30">30 Min.</button>
+          <button class="btn sm" type="button" data-min="60">1 Std.</button>
+          <button class="btn sm" type="button" data-min="120">2 Std.</button>
+          <input id="pk-time" type="time" aria-label="Ablaufzeit als Uhrzeit">
+        </div>
+        <button id="pk-meter-x" class="btn sm" type="button" hidden>Parkuhr löschen</button>
+        <p class="pk-hint">Erinnerung 10 Minuten vor Ablauf und bei Ablauf – zuverlässig nur, solange GeoCam geöffnet ist. Als Wecker bitte zusätzlich die Uhr des Handys stellen.</p>
+      </div>
       <button id="pk-new" class="btn" type="button">Neuen Parkplatz fotografieren</button>
       <button id="pk-end" class="btn danger" type="button">Parkplatz beenden</button>
       <p class="pk-hint">„Parkplatz beenden“ löst nur die Markierung – das Foto bleibt in der Galerie.</p>
@@ -381,7 +421,7 @@ if ("serviceWorker" in navigator) {
 <script src="./vendor/leaflet/leaflet.js"></script>
 <script src="./exif.js"></script>
 <script src="./vendor/qrcode/qrcode.js"></script>
-<script src="./app.js?v=5"></script>
+<script src="./app.js?v=6"></script>
 
 <script>
 /* Install-Affordanz – bewusst inline (nicht im SW-gecachten app.js) */
