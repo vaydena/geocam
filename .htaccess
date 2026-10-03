@@ -1,0 +1,7 @@
+# GeoCam – Service Worker und Startseite nie lang cachen (Hostinger-hCDN)
+<IfModule mod_headers.c>
+  <FilesMatch "^(sw\.js|index\.html|manifest\.webmanifest)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+  </FilesMatch>
+</IfModule>
+AddType application/manifest+json .webmanifest

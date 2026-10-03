@@ -1,0 +1,14 @@
+# ── spiele.vaydena.de — was NIE ins Repo / nie zu Hostinger gehört ──────────────
+# Deploy-Diagnose (lokaler curl-FTPS-Lauf)
+deploy-local.log
+
+# lokale Geheimnisse (falls je welche dazukommen)
+*.local.txt
+
+# Betriebssystem / Editor
+.DS_Store
+Thumbs.db
+*.swp
+
+# Node (nur falls je Tools dazukommen)
+node_modules/
