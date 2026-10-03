@@ -309,7 +309,7 @@
     var c = $("#gps-chip"); c.classList.remove("ok", "warn");
     if (!hasLoc(loc)) {
       c.textContent = geoState === "ask" ? "Standort freigeben – tippen" : geoState === "denied" ? "Standort blockiert – tippen"
-        : geoState === "unavail" ? "Kein Standort – tippen zum Wählen" : "Standort wird gesucht …";
+        : geoState === "unavail" ? "GPS aus? – tippen" : "Standort wird gesucht …";
       c.classList.add("warn"); return;
     }
     var t = loc.place || (de(loc.lat, 4) + ", " + de(loc.lng, 4));
@@ -349,23 +349,28 @@
     var need = !geoHide && !hasLoc(loc) && (geoState === "ask" || geoState === "denied" || geoState === "unavail");
     $("#geo-ask").hidden = !need;
     if (need) {
-      $("#geo-ask-h").textContent = geoState === "ask" ? "Standort freigeben" : geoState === "denied" ? "Standort ist blockiert" : "Kein Standort gefunden";
+      $("#geo-ask-h").textContent = geoState === "ask" ? "Standort freigeben" : geoState === "denied" ? "Standort ist blockiert" : geoNoApi ? "Kein Standort verfügbar" : "Bitte Standort (GPS) einschalten";
       $("#geo-ask-t").textContent = geoState === "ask"
-        ? "GeoCam braucht deinen Standort, um Fotos und Videos mit Ort und Adresse zu stempeln und in der Karte zu zeigen."
+        ? "GeoCam braucht deinen Standort, um Fotos und Videos mit Ort und Adresse zu stempeln und in der Karte zu zeigen. Dafür muss der Standort (GPS) am Gerät eingeschaltet sein."
         : geoState === "denied"
-          ? "Bitte erlauben: Schloss-Symbol neben der Adresse → Berechtigungen → Standort → „Zulassen“ (installierte App: App-Symbol lange drücken → App-Info → Website-Einstellungen). Danach „Erneut versuchen“."
+          ? "Ist der Standort (GPS) am Gerät ausgeschaltet? Dann zuerst einschalten. Sonst bitte erlauben: Schloss-Symbol neben der Adresse → Berechtigungen → Standort → „Zulassen“ (installierte App: App-Symbol lange drücken → App-Info → Website-Einstellungen). Danach „Erneut versuchen“."
           : geoNoApi ? "Dieser Browser unterstützt keine Standortabfrage. Der Ort lässt sich manuell wählen."
-            : "Ist der Standort (GPS) am Gerät eingeschaltet? Danach „Erneut versuchen“ – oder den Ort manuell wählen.";
+            : "GeoCam bekommt keinen Standort. Bitte den Standort (GPS) in den Schnelleinstellungen des Geräts einschalten, dann „Erneut versuchen“ – oder den Ort manuell wählen.";
       $("#geo-ask-btn").textContent = geoState === "ask" ? "Standort freigeben" : "Erneut versuchen";
       $("#geo-ask-btn").hidden = geoNoApi;
     }
     chip();
   }
+  var geoSlow = null;
   function watchGeo() {
     var g = navigator.geolocation;
     if (geoWatch !== null) { g.clearWatch(geoWatch); geoWatch = null; }
     if (geoState !== "ok") { geoState = "search"; geoUi(); }
+    /* GPS am Gerät aus: der Browser meldet das oft erst nach dem Timeout oder gar nicht -> selbst nach 6 s hinweisen */
+    clearTimeout(geoSlow);
+    geoSlow = setTimeout(function () { if (geoState === "search" && !gpsRaw) { geoState = "unavail"; geoUi(); } }, 6000);
     geoWatch = g.watchPosition(function (p) {
+      clearTimeout(geoSlow);
       gpsRaw = p.coords;
       if (geoState !== "ok") { geoState = "ok"; geoUi(); }
       if (!loc.manual) setLoc(p.coords.latitude, p.coords.longitude, p.coords.altitude, p.coords.accuracy);
@@ -576,6 +581,7 @@
     startCompass(true);
     if (counting) return;
     if (rec) { stopRec(); return; }
+    if (!hasLoc(loc)) { geoHide = false; if (geoState === "search") geoState = "unavail"; geoUi(); toast("Kein Standort – bitte GPS am Gerät einschalten. Die Aufnahme wird ohne Ort gespeichert.", 4500); }
     countdown().then(function () { if (view !== "cam") return; if (S.mode === "video") startRec(); else takePhoto(); });
   }
   function lastThumb() {
@@ -981,7 +987,7 @@
     var c = $("#set-preview"), g = c.getContext("2d"), W = c.width, H = c.height;
     var sky = g.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, "#5b9bd5"); sky.addColorStop(0.62, "#cfe3f3"); sky.addColorStop(0.62, "#6b8f5a"); sky.addColorStop(1, "#3f5d3a");
     g.fillStyle = sky; g.fillRect(0, 0, W, H);
-    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg"; }
+    if (!_bg) { _bg = new Image(); _bg.onload = function () { drawPreview(); }; _bg.src = "./preview-freising.jpg?v=4"; }
     if (_bg.complete && _bg.naturalWidth) {   /* Illustration der Freisinger Altstadt, formatfüllend */
       var k = Math.max(W / _bg.naturalWidth, H / _bg.naturalHeight), bw = _bg.naturalWidth * k, bh = _bg.naturalHeight * k;
       g.drawImage(_bg, (W - bw) / 2, (H - bh) / 2, bw, bh);
@@ -1235,7 +1241,7 @@
     });
     $("#park-arm-x").addEventListener("click", function () { armPark(false); });
     $("#gps-chip").addEventListener("click", function () {
-      if (!hasLoc(loc) && (geoState === "ask" || geoState === "denied") ) requestGeo(); else openPicker("live");
+      if (!hasLoc(loc) && geoState !== "ok") requestGeo(); else openPicker("live");
     });
     $("#geo-ask-btn").addEventListener("click", requestGeo);
     $("#geo-ask-man").addEventListener("click", function () { openPicker("live"); });

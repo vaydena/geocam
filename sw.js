@@ -7,18 +7,18 @@
    - Dokumente (HTML): Netz zuerst, offline Rückfall auf den Cache.
    - Statische Assets: Cache zuerst, sonst Netz + nachlegen. */
 
-const CACHE = "geocam-app-v3";   // <-- bei jedem Asset-/Code-Deploy die Zahl erhöhen (v2, v3, ...)
+const CACHE = "geocam-app-v4";   // <-- bei jedem Asset-/Code-Deploy die Zahl erhöhen (v2, v3, ...) UND ?v= an app.js/app.css/Bild in app.html, app.js, SHELL
 const SHELL = [
   "./index.html",
   "./app.html",
   "./landing.css",
-  "./app.css",
-  "./app.js",
+  "./app.css?v=4",
+  "./app.js?v=4",
   "./exif.js",
   "./vendor/leaflet/leaflet.js",
   "./vendor/leaflet/leaflet.css",
   "./vendor/qrcode/qrcode.js",
-  "./preview-freising.jpg",
+  "./preview-freising.jpg?v=4",
   "./hero-freising.jpg",
   "./manifest.webmanifest",
   "./icon-192.png",
@@ -32,7 +32,8 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE).then((cache) =>
       // best effort: ein einzelner Fehlschlag (z. B. 404) darf die Installation nicht kippen
-      Promise.allSettled(SHELL.map((u) => cache.add(u)))
+      // cache:"reload" umgeht den Browser-HTTP-Cache (Hoster liefert JS/CSS mit max-age 7 Tage)
+      Promise.allSettled(SHELL.map((u) => cache.add(new Request(u, { cache: "reload" }))))
     )
   );
 });
